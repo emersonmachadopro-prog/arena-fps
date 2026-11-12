@@ -39,8 +39,11 @@ export class SoloSession {
       wp: null, stuck: 0, lastPos: null,
       reaction: 0, shootCd: 0, strafe: 1, strafeTimer: 0,
       respawn: 0, kills: 0, deaths: 0,
-      avatar: new Avatar(this.ctx.scene, name, 'B', { skins: { character: SKIN_IDS[(i + 1) % SKIN_IDS.length] }, weapon: 'ak' }),
+      avatar: null,
+      _avatar: new Avatar(this.ctx.scene, name, 'B', { skins: { character: SKIN_IDS[(i + 1) % SKIN_IDS.length] }, weapon: 'ak' }),
     };
+    bot.avatar = bot._avatar; delete bot._avatar;
+    bot.avatar.onStep = (pos, loud) => sfx.step({ x: pos.x, y: pos.y + 0.1, z: pos.z }, loud);
     this.respawnBot(bot, BOT_WAYPOINTS[6 + i * 4] || BOT_WAYPOINTS[i]);
     return bot;
   }
@@ -55,6 +58,7 @@ export class SoloSession {
     Object.assign(bot, { hp: PLAYER.MAX_HP, alive: true, reaction: 0, wp: null, stuck: 0 });
     bot.pos = { x: at[0], y: 0, z: at[1] };
     bot.vel = { x: 0, y: 0, z: 0 };
+    bot.avatar.revive();
     bot.avatar.setTarget({ ...bot.pos, yaw: bot.yaw, pitch: 0 }, true);
     bot.avatar.setVisible(true);
   }
@@ -62,7 +66,7 @@ export class SoloSession {
   spawnPlayer() {
     const s = SPAWNS.A[Math.floor(Math.random() * SPAWNS.A.length)];
     this.ctx.player.spawn(s);
-    this.ctx.weapons.reset(activeLoadout()); // loadout choisi avec M
+    this.ctx.weapons.reset(activeLoadout(), { rack: true }); // loadout choisi avec M + animation d'armement
     this.ctx.weapons.setVisible(true);
   }
 
@@ -94,12 +98,12 @@ export class SoloSession {
       this.ctx.hud.hitmarker(hit.headshot);
       if (kill) {
         bot.alive = false; bot.deaths++; bot.respawn = 3;
-        bot.avatar.setVisible(false);
+        bot.avatar.die(); // il tombe au sol
         this.kills++;
         sfx.kill();
         this.ctx.hud.kill({ killer: 'Toi', killerTeam: 'A', victim: bot.name, victimTeam: 'B', weapon, headshot: hit.headshot }, true);
       }
-      return { dist: hit.dist, hitPlayer: true };
+      return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
     }
     return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
   }
@@ -115,6 +119,7 @@ export class SoloSession {
 
     for (const bot of this.bots) {
       if (!bot.alive) {
+        bot.avatar.update(dt); // animation de chute
         bot.respawn -= dt;
         if (bot.respawn <= 0) this.respawnBot(bot);
         continue;
@@ -190,11 +195,9 @@ export class SoloSession {
     const target = [{ id: 'me', x: player.pos.x, y: player.pos.y, z: player.pos.z, crouch: player.crouch }];
     const { hit, wallDist } = traceShot(eye, d, target, MAP_BOXES, 200);
     const end = hit ? hit.dist : wallDist;
-    this.ctx.effects.tracer(
-      { x: eye.x + d.x * 0.6, y: eye.y - 0.2, z: eye.z + d.z * 0.6 },
-      { x: eye.x + d.x * end, y: eye.y + d.y * end, z: eye.z + d.z * end }
-    );
-    sfx.shot(Math.max(0.15, 1 - dist / 40));
+    const muzzle = bot.avatar.muzzleWorld(); // la traçante part du canon de son arme
+    this.ctx.effects.tracer(muzzle, { x: eye.x + d.x * end, y: eye.y + d.y * end, z: eye.z + d.z * end });
+    sfx.shot(muzzle);
     if (!hit) return;
 
     player.hp -= hit.headshot ? 40 : 14; // les bots font moins mal que l'AK du joueur

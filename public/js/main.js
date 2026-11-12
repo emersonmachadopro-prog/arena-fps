@@ -11,7 +11,8 @@ import { HUD } from './hud.js';
 import { SoloSession } from './solo.js';
 import { NetGame } from './net.js';
 import { Showcase } from './showcase.js';
-import { initAudio } from './audio.js';
+import { initAudio, setListener, sfx } from './audio.js';
+import { escapeHtml } from './hud.js';
 import { settings, saveSettings, keyLabel, activeLoadout } from './settings.js';
 import { WEAPONS } from '/shared/constants.js';
 import {
@@ -267,19 +268,36 @@ function loop() {
   if (session) {
     if (input.was('loadout') && input.locked) openLoadout();
     if (player.alive) {
-      if (input.locked) player.look(input);
+      if (input.locked) { player.look(input); weapons.addLook(...(player.lastLook || [0, 0])); }
       player.update(dt, input, session.canMove());
+      // Bruits de pas et atterrissage
+      if (player.stepped) { sfx.step(null, player.stepped === 2); player.stepped = 0; }
+      if (player.landed) { sfx.land(); weapons.land(player.landed); }
     }
-    weapons.update(dt, input, player, session, session.canFire() && input.locked);
+    // Mort en multijoueur : on voit l'arme et le HUD du coéquipier regardé
+    const spec = session === net ? net.spectateInfo() : null;
+    if (spec) {
+      weapons.setVisible(true);
+      weapons.spectate(spec, dt, spec.speed || 0);
+    } else {
+      weapons.update(dt, input, player, session, session.canFire() && input.locked);
+    }
     session.update(dt);
-    hud.update({
+    setListener(world.camera); // le son 3D suit la caméra
+    hud.update(spec ? {
+      hp: spec.hp, weapon: spec.weapon, primary: spec.primary, ads: 0, optic: null, overlay: null,
+      mag: spec.mag, reserve: spec.reserve, reloading: spec.reloading, spread: 0.02, ...session.hudState(),
+    } : {
       hp: player.hp, weapon: weapons.current, primary: weapons.primary, ads: weapons.ads,
       optic: weapons.currentOptic, overlay: player.alive ? weapons.overlay : null,
       mag: weapons.mag, reserve: weapons.reserve, reloading: weapons.reloading, spread: weapons.lastSpread,
       ...session.hudState(),
     });
+    $('spectate-label').classList.toggle('hidden', !spec);
+    if (spec) $('spectate-label').innerHTML = `Vous regardez « <b>${escapeHtml(spec.name)}</b> »`;
     hud.scoreboard(input.is('scoreboard') && input.locked, session.scoreboardPlayers());
     $('dead-hint').classList.toggle('hidden', player.alive);
+    if (!player.alive && !spec && session === net) weapons.setVisible(false);
     $('dead-key').textContent = keyLabel(settings.keys.loadout);
   } else {
     showcase.update(dt);

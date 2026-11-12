@@ -101,6 +101,7 @@ io.on('connection', (socket) => {
   socket.on('move', (data) => room?.onMove(socket.id, data || {}));
   socket.on('shoot', (data) => room?.onShoot(socket.id, data || {}));
   socket.on('reload', () => room?.onReload(socket.id));
+  socket.on('reloadCancel', () => room?.onReloadCancel(socket.id));
   socket.on('switch', (w) => room?.onSwitch(socket.id, w));
 });
 

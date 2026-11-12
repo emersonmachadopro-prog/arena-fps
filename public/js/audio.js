@@ -1,85 +1,215 @@
 // =====================================================================
-//  audio.js — Sons générés par le code (Web Audio API), aucun fichier
-//  audio à télécharger. Le volume suit les paramètres.
+//  audio.js — Sons générés par le code (Web Audio API), aucun fichier.
+//  - Tirs en plusieurs couches (claquement, corps, grave, mécanique)
+//    + écho (réverbération) pour un rendu plus "vraie arme"
+//  - Sons placés en 3D (HRTF) : on entend d'où viennent les pas et les tirs
+//  - Bruits de rechargement synchronisés avec les animations
 // =====================================================================
 import { settings, onSettingsChange } from './settings.js';
 
-let ctx = null, master = null, noiseBuf = null;
+let ctx = null, master = null, reverbIn = null, noiseBuf = null;
 
 /** Le navigateur n'autorise le son qu'après un clic : on initialise à ce moment. */
 export function initAudio() {
   if (ctx) { ctx.resume(); return; }
   ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+  // Sortie : volume général → compresseur (évite la saturation des rafales)
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.ratio.value = 6; comp.attack.value = 0.002; comp.release.value = 0.15;
+  comp.connect(ctx.destination);
   master = ctx.createGain();
   master.gain.value = settings.volume;
-  master.connect(ctx.destination);
-  // Bruit blanc réutilisable (base des sons de tir)
-  noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+  master.connect(comp);
+
+  // Bruit blanc réutilisable (base de la plupart des sons)
+  noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
   const data = noiseBuf.getChannelData(0);
   for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+
+  // Réverbération : on fabrique une "empreinte" de salle (bruit qui s'éteint)
+  const conv = ctx.createConvolver();
+  const len = ctx.sampleRate * 1.6;
+  const ir = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let c = 0; c < 2; c++) {
+    const d = ir.getChannelData(c);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3.2);
+  }
+  conv.buffer = ir;
+  reverbIn = ctx.createGain(); reverbIn.gain.value = 0.35;
+  const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3500;
+  reverbIn.connect(conv).connect(lp).connect(master);
 }
 onSettingsChange(s => { if (master) master.gain.value = s.volume; });
 
-function noise(dur, freq, q, vol, type = 'lowpass', t0 = 0) {
-  const t = ctx.currentTime + t0;
-  const src = ctx.createBufferSource(); src.buffer = noiseBuf;
-  const f = ctx.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
-  const g = ctx.createGain();
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  src.connect(f).connect(g).connect(master);
-  src.start(t); src.stop(t + dur);
+/** Position/orientation de l'auditeur = la caméra (à appeler à chaque image) */
+export function setListener(camera) {
+  if (!ctx) return;
+  const L = ctx.listener;
+  const p = camera.position;
+  const f = { x: -Math.sin(camera.rotation.y) * Math.cos(camera.rotation.x), y: Math.sin(camera.rotation.x), z: -Math.cos(camera.rotation.y) * Math.cos(camera.rotation.x) };
+  if (L.positionX) {
+    const t = ctx.currentTime;
+    L.positionX.setTargetAtTime(p.x, t, 0.01); L.positionY.setTargetAtTime(p.y, t, 0.01); L.positionZ.setTargetAtTime(p.z, t, 0.01);
+    L.forwardX.setTargetAtTime(f.x, t, 0.01); L.forwardY.setTargetAtTime(f.y, t, 0.01); L.forwardZ.setTargetAtTime(f.z, t, 0.01);
+    L.upX.value = 0; L.upY.value = 1; L.upZ.value = 0;
+  } else {
+    L.setPosition(p.x, p.y, p.z);
+    L.setOrientation(f.x, f.y, f.z, 0, 1, 0);
+  }
 }
 
-function tone(freq, dur, vol, type = 'sine', t0 = 0, endFreq = null) {
-  const t = ctx.currentTime + t0;
-  const o = ctx.createOscillator(); o.type = type;
-  o.frequency.setValueAtTime(freq, t);
-  if (endFreq) o.frequency.exponentialRampToValueAtTime(endFreq, t + dur);
+/**
+ * Point d'entrée d'un son : s'il a une position, il passe par un "panner" 3D.
+ * reverb = quantité d'écho (0..1)
+ */
+function output(pos, vol = 1, reverb = 0.2, far = 60) {
   const g = ctx.createGain();
-  g.gain.setValueAtTime(vol, t);
-  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-  o.connect(g).connect(master);
-  o.start(t); o.stop(t + dur);
+  g.gain.value = vol;
+  let head = g;
+  if (pos) {
+    const pan = ctx.createPanner();
+    pan.panningModel = 'HRTF';
+    pan.distanceModel = 'inverse';
+    pan.refDistance = 2.5; pan.rolloffFactor = 1.1; pan.maxDistance = far;
+    if (pan.positionX) { pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z; }
+    else pan.setPosition(pos.x, pos.y, pos.z);
+    g.connect(pan).connect(master);
+  } else g.connect(master);
+  if (reverb > 0) {
+    const r = ctx.createGain(); r.gain.value = reverb;
+    g.connect(r).connect(reverbIn);
+  }
+  return head;
+}
+
+function noise(dest, { t = 0, dur = 0.1, type = 'lowpass', freq = 1000, q = 0.7, vol = 0.5, attack = 0.001, sweep = null }) {
+  const t0 = ctx.currentTime + t;
+  const src = ctx.createBufferSource(); src.buffer = noiseBuf;
+  src.playbackRate.value = 0.9 + Math.random() * 0.2;
+  const f = ctx.createBiquadFilter(); f.type = type; f.frequency.setValueAtTime(freq, t0); f.Q.value = q;
+  if (sweep) f.frequency.exponentialRampToValueAtTime(sweep, t0 + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(vol, t0 + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(f).connect(g).connect(dest);
+  src.start(t0, Math.random()); src.stop(t0 + dur + 0.05);
+}
+
+function tone(dest, { t = 0, dur = 0.1, freq = 200, end = null, vol = 0.5, type = 'sine' }) {
+  const t0 = ctx.currentTime + t;
+  const o = ctx.createOscillator(); o.type = type;
+  o.frequency.setValueAtTime(freq, t0);
+  if (end) o.frequency.exponentialRampToValueAtTime(end, t0 + dur);
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(vol, t0);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g).connect(dest);
+  o.start(t0); o.stop(t0 + dur + 0.02);
+}
+
+/** Petit clic métallique (pièces d'arme qui se touchent) */
+function metal(dest, t, vol = 0.4, freq = 3200) {
+  noise(dest, { t, dur: 0.035, type: 'bandpass', freq, q: 6, vol });
+  tone(dest, { t, dur: 0.05, freq: freq * 0.8, vol: vol * 0.25, type: 'triangle' });
+}
+
+// Distance d'un son jusqu'à l'auditeur (pour assourdir les tirs lointains)
+function distTo(pos) {
+  if (!pos || !ctx) return 0;
+  const L = ctx.listener;
+  const lx = L.positionX ? L.positionX.value : 0, ly = L.positionY ? L.positionY.value : 0, lz = L.positionZ ? L.positionZ.value : 0;
+  return Math.hypot(pos.x - lx, pos.y - ly, pos.z - lz);
 }
 
 export const sfx = {
-  /** volume 0..1 (pour les tirs lointains) */
-  shot(vol = 1) {
-    if (!ctx || vol < 0.02) return;
-    noise(0.18, 2500, 0.7, 0.5 * vol);
-    noise(0.09, 900, 1, 0.6 * vol, 'bandpass');
-    tone(140, 0.12, 0.5 * vol, 'triangle', 0, 50);
-  },
-  sniper(vol = 1) {
-    if (!ctx || vol < 0.02) return;
-    noise(0.45, 1800, 0.6, 0.7 * vol);
-    noise(0.15, 600, 1, 0.7 * vol, 'bandpass');
-    tone(90, 0.3, 0.6 * vol, 'triangle', 0, 35);
-  },
-  bolt() { if (!ctx) return; noise(0.05, 2000, 8, 0.3, 'bandpass'); noise(0.05, 1400, 8, 0.3, 'bandpass', 0.18); },
-  knife(vol = 1) { if (!ctx) return; noise(0.15, 3000, 4, 0.25 * vol, 'bandpass'); },
-  reload() {
+  /** Tir d'AK-47. pos = position 3D (null = notre propre arme) */
+  shot(pos = null) {
     if (!ctx) return;
-    noise(0.05, 1800, 6, 0.3, 'bandpass', 0.2);
-    noise(0.05, 1200, 6, 0.3, 'bandpass', 1.1);
-    noise(0.06, 2200, 8, 0.35, 'bandpass', 1.9);
+    const d = distTo(pos);
+    const out = output(pos, pos ? 1.4 : 1, 0.45 + Math.min(d / 60, 0.4), 120);
+    const bright = d > 25 ? 1200 : 6000;                                                 // les tirs lointains sont plus sourds
+    noise(out, { dur: 0.04, type: 'highpass', freq: 2200, vol: 0.9 });                    // claquement
+    noise(out, { dur: 0.18, type: 'lowpass', freq: bright, sweep: 400, vol: 1.0 });       // corps de la détonation
+    noise(out, { dur: 0.09, type: 'bandpass', freq: 700, q: 1.2, vol: 0.8 });
+    tone(out, { dur: 0.14, freq: 160, end: 42, vol: 0.9 });                               // coup dans le ventre
+    if (!pos) metal(out, 0.035, 0.18, 4200);                                              // culasse qui recule
   },
-  empty() { if (ctx) noise(0.03, 3000, 10, 0.2, 'bandpass'); },
+  /** Tir du Kar98k : plus lourd, plus long, gros écho */
+  sniper(pos = null) {
+    if (!ctx) return;
+    const d = distTo(pos);
+    const out = output(pos, pos ? 1.6 : 1.1, 0.7, 160);
+    noise(out, { dur: 0.05, type: 'highpass', freq: 1800, vol: 1.0 });
+    noise(out, { dur: 0.42, type: 'lowpass', freq: d > 30 ? 900 : 4500, sweep: 250, vol: 1.0 });
+    noise(out, { dur: 0.2, type: 'bandpass', freq: 450, q: 1, vol: 0.9 });
+    tone(out, { dur: 0.35, freq: 110, end: 30, vol: 1.0 });
+  },
+  knife(pos = null) {
+    if (!ctx) return;
+    const out = output(pos, 0.8, 0.05, 20);
+    noise(out, { dur: 0.18, type: 'bandpass', freq: 700, sweep: 3200, q: 2.5, vol: 0.5, attack: 0.04 }); // "fsshh"
+  },
+  /** Bruit de pas. loud = en courant. pos = null pour nos propres pas */
+  step(pos = null, loud = false) {
+    if (!ctx) return;
+    const out = output(pos, (pos ? 1.6 : 0.5) * (loud ? 1.3 : 1), 0.08, 35);
+    const p = 0.85 + Math.random() * 0.3;
+    tone(out, { dur: 0.07, freq: 95 * p, end: 55, vol: 0.7 });                                     // talon
+    noise(out, { dur: 0.06, type: 'lowpass', freq: 500 * p, vol: 0.5 });
+    noise(out, { t: 0.015, dur: 0.07, type: 'bandpass', freq: 2200 * p, q: 1.5, vol: 0.22 });      // gravier
+  },
+  land(pos = null) {
+    if (!ctx) return;
+    const out = output(pos, pos ? 1.6 : 0.7, 0.1, 35);
+    tone(out, { dur: 0.12, freq: 80, end: 40, vol: 0.9 });
+    noise(out, { dur: 0.1, type: 'lowpass', freq: 700, vol: 0.6 });
+    noise(out, { t: 0.02, dur: 0.08, type: 'bandpass', freq: 1800, q: 1.2, vol: 0.3 });
+  },
+
+  // ---- Mécanique des armes (rechargement, inspection, sortie) ----
+  magOut(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.5, 2600); noise(o, { t: 0.02, dur: 0.12, type: 'bandpass', freq: 1200, q: 2, vol: 0.25 }); },
+  magIn(pos) { if (!ctx) return; const o = output(pos, 1, 0.08, 25); noise(o, { dur: 0.05, type: 'bandpass', freq: 900, q: 2, vol: 0.6 }); metal(o, 0.03, 0.6, 2300); tone(o, { t: 0.03, dur: 0.06, freq: 180, end: 90, vol: 0.4 }); },
+  chargeBack(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1800, sweep: 1200, q: 3, vol: 0.35 }); metal(o, 0.09, 0.4, 3000); },
+  chargeRelease(pos) { if (!ctx) return; const o = output(pos, 1, 0.1, 25); metal(o, 0, 0.7, 2500); metal(o, 0.012, 0.4, 3800); tone(o, { dur: 0.08, freq: 260, end: 120, vol: 0.35 }); },
+  boltUp(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.45, 2800); },
+  boltBack(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.12, type: 'bandpass', freq: 1500, sweep: 900, q: 3, vol: 0.35 }); metal(o, 0.11, 0.35, 3300); },
+  boltForward(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1000, sweep: 1700, q: 3, vol: 0.35 }); metal(o, 0.09, 0.45, 2900); },
+  boltDown(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.55, 2400); },
+  roundIn(pos) { if (!ctx) return; const o = output(pos, 0.8, 0.04, 20); metal(o, 0, 0.35, 3600); noise(o, { t: 0.02, dur: 0.04, type: 'bandpass', freq: 1400, q: 3, vol: 0.2 }); },
+  cloth(pos) { if (!ctx) return; const o = output(pos, 0.6, 0, 15); noise(o, { dur: 0.16, type: 'bandpass', freq: 900, q: 0.8, vol: 0.18, attack: 0.04 }); },
+  knifeFlip(pos) { if (!ctx) return; const o = output(pos, 0.6, 0.03, 15); metal(o, 0, 0.18, 5200); },
+
+  /** Bruit de rechargement générique d'un autre joueur (positionné) */
+  remoteReload(pos, weapon) {
+    if (!ctx) return;
+    if (weapon === 'kar98k') { this.boltUp(pos); setTimeout(() => this.boltBack(pos), 200); }
+    else { this.magOut(pos); setTimeout(() => this.magIn(pos), 900); }
+  },
+
+  // ---- Interface ----
+  empty() { if (ctx) metal(output(null, 0.8), 0, 0.3, 4500); },
   hit(head) {
     if (!ctx) return;
-    if (head) { tone(1400, 0.15, 0.25, 'sine'); tone(2100, 0.2, 0.15, 'sine', 0.03); }
-    else tone(900, 0.06, 0.2, 'square');
+    const o = output(null, 1, 0);
+    if (head) { tone(o, { dur: 0.18, freq: 1500, vol: 0.28 }); tone(o, { t: 0.02, dur: 0.22, freq: 2250, vol: 0.18 }); }
+    else { noise(o, { dur: 0.04, type: 'bandpass', freq: 2600, q: 4, vol: 0.4 }); tone(o, { dur: 0.05, freq: 1100, vol: 0.12, type: 'square' }); }
   },
-  kill() { if (ctx) { tone(700, 0.1, 0.2, 'sine'); tone(1050, 0.18, 0.2, 'sine', 0.08); } },
-  hurt() { if (ctx) tone(220, 0.15, 0.3, 'sawtooth', 0, 120); },
-  switchWeapon() { if (ctx) noise(0.04, 2500, 5, 0.2, 'bandpass'); },
-  roundStart() { if (ctx) { tone(523, 0.12, 0.2); tone(784, 0.25, 0.2, 'sine', 0.12); } },
+  kill() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.1, freq: 760, vol: 0.2 }); tone(o, { t: 0.08, dur: 0.2, freq: 1140, vol: 0.2 }); },
+  hurt() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.15, freq: 180, end: 90, vol: 0.4, type: 'triangle' }); noise(o, { dur: 0.08, type: 'lowpass', freq: 600, vol: 0.4 }); },
+  switchWeapon() { if (!ctx) return; this.cloth(); metal(output(null, 0.6), 0.08, 0.25, 3000); },
+  roundStart() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.12, freq: 523, vol: 0.2 }); tone(o, { t: 0.12, dur: 0.25, freq: 784, vol: 0.2 }); },
   roundEnd(win) {
     if (!ctx) return;
-    if (win) { tone(523, 0.15, 0.2); tone(659, 0.15, 0.2, 'sine', 0.12); tone(784, 0.35, 0.2, 'sine', 0.24); }
-    else { tone(392, 0.2, 0.2); tone(311, 0.4, 0.2, 'sine', 0.18); }
+    const o = output(null, 1, 0);
+    if (win) { tone(o, { dur: 0.15, freq: 523, vol: 0.2 }); tone(o, { t: 0.12, dur: 0.15, freq: 659, vol: 0.2 }); tone(o, { t: 0.24, dur: 0.35, freq: 784, vol: 0.2 }); }
+    else { tone(o, { dur: 0.2, freq: 392, vol: 0.2 }); tone(o, { t: 0.18, dur: 0.4, freq: 311, vol: 0.2 }); }
   },
-  slide() { if (ctx) noise(0.5, 900, 0.8, 0.25, 'lowpass'); },
-  click() { if (ctx) tone(1200, 0.03, 0.08, 'square'); },
+  slide() { if (ctx) noise(output(null, 1, 0), { dur: 0.5, type: 'lowpass', freq: 900, sweep: 300, vol: 0.3, attack: 0.03 }); },
+  click() { if (ctx) tone(output(null, 1, 0), { dur: 0.03, freq: 1200, vol: 0.08, type: 'square' }); },
+
+  // Compatibilité : ancien nom (rechargement complet joué d'un coup)
+  reload() {},
+  bolt() { this.boltUp(); setTimeout(() => this.boltBack(), 120); setTimeout(() => this.boltForward(), 300); setTimeout(() => this.boltDown(), 420); },
 };

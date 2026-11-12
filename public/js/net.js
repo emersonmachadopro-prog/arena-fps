@@ -2,6 +2,12 @@
 //  net.js — Mode multijoueur : connexion au serveur Socket.io,
 //  lobby, synchronisation des joueurs, manches et score.
 //  Le serveur a toujours le dernier mot (PV, kills, score).
+//
+//  Fluidité & précision :
+//  - on estime l'horloge du serveur pour rejouer les mouvements des autres
+//    avec 100 ms de retard (interpolation = mouvements fluides)
+//  - chaque tir envoie l'instant affiché à l'écran : le serveur "remonte
+//    le temps" pour vérifier la touche (compensation de latence)
 // =====================================================================
 import { PLAYER, WEAPONS, TEAMS, MATCH } from '/shared/constants.js';
 import { MAP_BOXES } from '/shared/map.js';
@@ -9,6 +15,8 @@ import { raycastWorld, traceShot } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
 import { sfx } from './audio.js';
 import { settings, saveSettings, activeLoadout } from './settings.js';
+
+const INTERP_DELAY = 100;
 
 export class NetGame {
   /**
@@ -25,7 +33,9 @@ export class NetGame {
     this.inMatch = false;
     this.lastPhase = null;
     this.sendTimer = 0;
-    this.spectating = null;
+    this.spectating = null; // id du coéquipier qu'on regarde une fois mort
+    this.clockOffset = null; // horloge serveur - horloge locale (ms)
+    this.specCam = null;
 
     const s = this.socket;
     s.on('connect_error', () => ui.onError('Impossible de joindre le serveur.'));
@@ -51,6 +61,9 @@ export class NetGame {
   get myId() { return this.socket.id; }
   get myTeam() { return this.lobby?.players.find(p => p.id === this.myId)?.team; }
 
+  /** Heure du serveur estimée (ms) */
+  serverNow() { return performance.now() + (this.clockOffset ?? 0); }
+
   // ---------------- Lobby ----------------
   create(name) { return new Promise(r => this.socket.emit('createRoom', { name, skins: settings.skins, loadout: activeLoadout() }, r)); }
   join(code, name) { return new Promise(r => this.socket.emit('joinRoom', { code, name, skins: settings.skins, loadout: activeLoadout() }, r)); }
@@ -75,19 +88,23 @@ export class NetGame {
   onSpawn(sp) {
     const { player, weapons } = this.ctx;
     player.spawn(sp);
-    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic });
+    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic }, { rack: true }); // animation d'armement (D2)
     weapons.setVisible(true);
     this.spectating = null;
+    this.specCam = null;
   }
 
   onState(st) {
+    // Horloge : on garde l'estimation la plus "rapide" (paquets les moins retardés)
+    const sample = st.t - performance.now();
+    this.clockOffset = this.clockOffset === null ? sample : Math.max(sample, this.clockOffset - 2);
     this.state = st;
     const { player, weapons, hud } = this.ctx;
 
     // Messages de début de manche
     if (st.phase !== this.lastPhase) {
       if (st.phase === 'freeze') hud.message(`Manche ${st.round}`, `${TEAMS.A.name} ${st.score.A} — ${st.score.B} ${TEAMS.B.name}`, MATCH.FREEZE_TIME * 1000);
-      if (st.phase === 'live' && this.lastPhase === 'freeze') { hud.message('GO !', '', 800, '#22d3ee'); sfx.roundStart(); }
+      if (st.phase === 'live' && this.lastPhase === 'freeze') { hud.message('GO !', '', 800, '#f5b83d'); sfx.roundStart(); }
       this.lastPhase = st.phase;
     }
 
@@ -98,23 +115,30 @@ export class NetGame {
         player.hp = p.hp;
         if (player.alive && !p.alive) this.onLocalDeath();
         player.alive = p.alive;
-        // Resynchronise les munitions si on ne tire pas en ce moment
-        if (!weapons.reloading && !p.reloading && weapons.sinceShot > 0.5 && p.weapon === weapons.current && p.primary === weapons.primary && p.weapon !== 'knife') {
+        // Resynchronise les munitions si on ne tire / recharge pas en ce moment
+        if (!weapons.reloading && !p.reloading && weapons.sinceShot > 0.5 && p.weapon === weapons.current && p.primary === weapons.primary && p.weapon !== 'knife' && !this.spectating) {
           weapons.mag = p.mag; weapons.reserve = p.reserve;
         }
         continue;
       }
       seen.add(p.id);
       let av = this.avatars.get(p.id);
+      const lp = this.lobby?.players.find(l => l.id === p.id);
       if (!av) {
-        const lp = this.lobby?.players.find(l => l.id === p.id);
-        av = new Avatar(this.ctx.scene, p.name, p.team, { skins: lp?.skins, weapon: p.weapon, optic: p.optic });
-        this.avatars.set(p.id, av); av.setTarget(p, true);
+        av = new Avatar(this.ctx.scene, p.name, p.team, { skins: lp?.skins, weapon: p.weapon, optic: p.optic, ally: p.team === this.myTeam });
+        av.onStep = (pos, loud) => sfx.step({ x: pos.x, y: pos.y + 0.1, z: pos.z }, loud);
+        this.avatars.set(p.id, av);
+        av.pushSnapshot(st.t, p, true);
+      } else {
+        av.pushSnapshot(st.t, p, av.dead && p.alive); // téléportation au respawn
       }
       av.setWeapon(p.weapon, p.weapon === p.primary ? p.optic : 'iron');
-      av.setTarget(p, av.wasDead && p.alive); // téléportation au respawn
-      av.wasDead = !p.alive;
-      av.alive = p.alive;
+      // Rechargement (F4) + son positionné
+      if (p.reloading && av.reloadT < 0 && p.alive) sfx.remoteReload({ x: p.x, y: p.y + 1.2, z: p.z }, p.weapon);
+      av.setReloading(p.reloading);
+      if (!p.alive && !av.dead) av.die();       // chute (F5)
+      if (p.alive && av.dead) av.revive();
+      av.info = p;
       av.team = p.team;
     }
     for (const [id, av] of this.avatars) if (!seen.has(id)) { av.dispose(); this.avatars.delete(id); }
@@ -122,21 +146,23 @@ export class NetGame {
 
   onLocalDeath() {
     this.ctx.weapons.setVisible(false);
-    this.ctx.hud.message('Éliminé', 'Tu regardes un coéquipier jusqu\'à la fin de la manche', 3000, '#ff4d6d');
+    this.ctx.hud.message('Éliminé', 'Tu regardes un coéquipier jusqu\'à la fin de la manche', 2500, '#ff4d6d');
   }
 
   onShot(e) {
-    if (e.id === this.myId) return; // nos tirs sont déjà affichés localement
-    const from = e.from;
-    const to = { x: from.x + e.dir.x * e.dist, y: from.y + e.dir.y * e.dist, z: from.z + e.dir.z * e.dist };
-    const p = this.ctx.player.pos;
-    const d = Math.hypot(from.x - p.x, from.z - p.z);
+    const mine = e.id === this.myId;
+    // Sang : seulement si le serveur a confirmé la touche
+    if (e.hitPlayer) this.ctx.effects.blood(e.point);
+    if (mine) return; // notre traçante et notre son sont déjà joués localement
+    const av = this.avatars.get(e.id);
+    const to = e.point;
+    const from = av && !av.dead ? av.muzzleWorld() : { x: e.from.x + e.dir.x * 0.7, y: e.from.y - 0.25, z: e.from.z + e.dir.z * 0.7 }; // depuis le canon de l'arme
     if (e.weapon !== 'knife') {
-      this.ctx.effects.tracer({ x: from.x + e.dir.x * 0.7, y: from.y - 0.25, z: from.z + e.dir.z * 0.7 }, to);
+      this.ctx.effects.tracer(from, to);
       if (e.hitWall) this.ctx.effects.impact(to);
-      (e.weapon === 'kar98k' ? sfx.sniper : sfx.shot)(Math.max(0.1, 1 - d / (e.weapon === 'kar98k' ? 80 : 45)));
+      (e.weapon === 'kar98k' ? sfx.sniper : sfx.shot).call(sfx, from);
     } else {
-      sfx.knife(Math.max(0.1, 1 - d / 15));
+      sfx.knife(from);
     }
   }
 
@@ -154,8 +180,8 @@ export class NetGame {
 
   onFeed(e) {
     if (e.type === 'kill') {
-      const mine = this.lobby?.players.some(p => p.id === this.myId && (p.name === e.killer || p.name === e.victim));
-      this.ctx.hud.kill(e, mine);
+      const me = this.lobby?.players.find(p => p.id === this.myId);
+      this.ctx.hud.kill(e, me && (me.name === e.killer || me.name === e.victim));
     } else if (e.type === 'leave') this.ctx.hud.info(`${e.name} a quitté la partie`);
   }
 
@@ -172,23 +198,25 @@ export class NetGame {
   canMove() { return this.inMatch && this.ctx.player.alive && this.phase !== 'freeze'; }
   canFire() { return this.inMatch && this.ctx.player.alive && this.phase === 'live'; }
   reload() { this.socket.emit('reload'); }
+  reloadCancel() { this.socket.emit('reloadCancel'); }
+  switchWeapon(w) { this.socket.emit('switch', w); }
   /** Choix du loadout (index 0..4) : envoyé au serveur qui l'applique au bon moment */
   setLoadout(index) { settings.activeLoadout = index; saveSettings(); this.socket.emit('setLoadout', activeLoadout()); return false; }
   sendLoadout() { this.socket.emit('setLoadout', activeLoadout()); }
-  switchWeapon(w) { this.socket.emit('switch', w); }
 
   fire(origin, dir, weapon) {
-    this.socket.emit('shoot', { dir, weapon });
-    // Estimation locale pour les effets visuels (le serveur confirmera les touches)
+    // rt = instant (horloge serveur) des positions affichées à l'écran
+    this.socket.emit('shoot', { dir, weapon, origin, rt: Math.round(this.serverNow() - INTERP_DELAY) });
+    // Estimation locale pour la traçante (le serveur confirmera les touches)
     const w = WEAPONS[weapon];
     const targets = [];
     for (const [id, av] of this.avatars) {
-      if (av.alive && av.team !== this.myTeam) {
+      if (!av.dead && av.team !== this.myTeam) {
         const g = av.group.position;
         targets.push({ id, x: g.x, y: g.y, z: g.z, crouch: av.crouch });
       }
     }
-    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range);
+    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range, 0.1);
     if (hit) return { dist: hit.dist, hitPlayer: true };
     return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
   }
@@ -206,21 +234,52 @@ export class NetGame {
       });
     }
 
-    // Avatars des autres joueurs
-    let spectate = null;
-    for (const av of this.avatars.values()) {
-      av.update(dt);
-      av.setVisible(av.alive);
-      if (!player.alive && av.alive && av.team === this.myTeam && !spectate) spectate = av;
+    // Avatars : mouvement interpolé (fluide) + silhouettes des alliés cachés derrière un mur
+    const now = this.serverNow();
+    const camPos = camera.position;
+    for (const [id, av] of this.avatars) {
+      av.update(dt, now);
+      av.setVisible(av.info?.team != null && (!av.dead || this.phase !== 'freeze') && id !== this.spectating);
+      if (av.ally && !av.dead && id !== this.spectating) {
+        const g = av.group.position;
+        const to = { x: g.x - camPos.x, y: g.y + 1.2 - camPos.y, z: g.z - camPos.z };
+        const d = Math.hypot(to.x, to.y, to.z) || 1;
+        const hidden = raycastWorld(camPos, { x: to.x / d, y: to.y / d, z: to.z / d }, MAP_BOXES, d) < d - 0.5;
+        av.setXray(hidden);
+      } else av.setXray(false);
     }
 
-    // Mort : la caméra suit un coéquipier vivant
-    if (!player.alive && spectate) {
-      spectate.setVisible(false);
-      const g = spectate.group.position, t = spectate.target;
-      camera.position.set(g.x, g.y + (spectate.crouch ? PLAYER.CROUCH_EYE : PLAYER.EYE), g.z);
-      camera.rotation.set(t.pitch, t.yaw, 0);
+    // Mort : on suit un coéquipier vivant (caméra lissée, son arme et son HUD)
+    if (!player.alive && this.inMatch) {
+      let target = this.avatars.get(this.spectating);
+      if (!target || target.dead || target.team !== this.myTeam) {
+        target = [...this.avatars.entries()].find(([, a]) => !a.dead && a.team === this.myTeam && a.info?.alive);
+        this.spectating = target ? target[0] : null;
+        target = target ? target[1] : null;
+        this.specCam = null;
+      }
+      if (target) {
+        const g = target.group.position;
+        const eye = { x: g.x, y: g.y + (target.crouch ? PLAYER.CROUCH_EYE : PLAYER.EYE), z: g.z };
+        const yaw = target.group.rotation.y, pitch = target.target.pitch || 0;
+        if (!this.specCam) this.specCam = { ...eye, yaw, pitch };
+        const c = this.specCam, k = Math.min(1, dt * 20);
+        c.x += (eye.x - c.x) * k; c.y += (eye.y - c.y) * k; c.z += (eye.z - c.z) * k;
+        c.yaw += Math.atan2(Math.sin(yaw - c.yaw), Math.cos(yaw - c.yaw)) * k;
+        c.pitch += (pitch - c.pitch) * k;
+        camera.position.set(c.x, c.y, c.z);
+        camera.rotation.set(c.pitch, c.yaw, 0);
+      }
     }
+  }
+
+  /** Infos du coéquipier regardé (pour le HUD et son arme en main) */
+  spectateInfo() {
+    if (this.ctx.player.alive || !this.spectating) return null;
+    const av = this.avatars.get(this.spectating);
+    if (!av?.info) return null;
+    const lp = this.lobby?.players.find(l => l.id === this.spectating);
+    return { ...av.info, skins: lp?.skins, speed: av.speed };
   }
 
   hudState() {

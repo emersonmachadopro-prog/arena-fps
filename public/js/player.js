@@ -43,6 +43,7 @@ export class LocalPlayer {
   /** Rotation de la caméra à la souris */
   look(input) {
     const [dx, dy] = input.consumeMouse();
+    this.lastLook = [dx, dy];
     const k = 0.0022 * settings.sensitivity / this.zoom; // moins sensible quand on zoome
     this.yaw -= dx * k;
     this.pitch -= dy * k * (settings.invertY ? -1 : 1);
@@ -121,7 +122,16 @@ export class LocalPlayer {
     // --- Gravité + collisions ---
     this.vel.y -= PLAYER.GRAVITY * dt;
     const height = this.crouch ? PLAYER.CROUCH_HEIGHT : PLAYER.HEIGHT;
+    const fallSpeed = -this.vel.y;
+    const wasGrounded = this.grounded;
     this.grounded = moveAndCollide(this.pos, this.vel, dt, height, MAP_BOXES, this.grounded);
+    // Atterrissage : on note la force de l'impact (pour l'animation de l'arme et le son)
+    this.landed = !wasGrounded && this.grounded && fallSpeed > 3 ? Math.min(1, fallSpeed / 12) : 0;
+    // Pas : un bruit tous les ~2,3 m (pas de bruit accroupi ou en glissade)
+    if (this.grounded && !this.crouch && this.speed > 2.5) {
+      this.stepDist = (this.stepDist || 0) + this.speed * dt;
+      if (this.stepDist > (this.sprinting ? 2.6 : 2.2)) { this.stepDist = 0; this.stepped = this.sprinting ? 2 : 1; }
+    }
 
     // Sécurité : si on tombe hors de la map (bug), on remonte
     if (this.pos.y < -5) this.pos.y = 2;

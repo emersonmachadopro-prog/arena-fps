@@ -42,7 +42,8 @@ export const WEAPONS = {
     auto: true,            // tir automatique
     magSize: 30,
     reserve: 90,           // balles de réserve par manche
-    reloadTime: 2.3,
+    reloadTime: 2.0,       // rechargement "tactique" (il reste des balles)
+    reloadEmptyTime: 2.6,  // rechargement à vide (+ armer le levier)
     range: 200,
     hipSpread: 0.045,      // sans viser
     adsSpread: 0.002,      // en visant
@@ -61,7 +62,10 @@ export const WEAPONS = {
     auto: false,
     magSize: 5,
     reserve: 20,
-    reloadTime: 3.0,
+    // Rechargement balle par balle : ouvrir + une poussée par balle + fermer
+    reloadOpen: 0.45,
+    reloadPerRound: 0.42,
+    reloadClose: 0.4,
     range: 300,
     hipSpread: 0.11,       // sans viser : vraiment pas précis
     adsSpread: 0,          // dans la lunette immobile : parfait
@@ -122,3 +126,21 @@ export const TEAMS = {
   A: { name: 'Violet', color: 0xa855f7, css: '#a855f7' },
   B: { name: 'Orange', color: 0xff8a1f, css: '#ff8a1f' },
 };
+
+/**
+ * Durée d'un rechargement selon l'arme et le nombre de balles à mettre.
+ * Retourne { time, rounds } (rounds = balles ajoutées).
+ */
+export function reloadPlan(weaponId, mag, reserve) {
+  const w = WEAPONS[weaponId];
+  const rounds = Math.min(w.magSize - mag, reserve);
+  if (w.reloadPerRound) return { time: w.reloadOpen + rounds * w.reloadPerRound + w.reloadClose, rounds, perRound: true };
+  return { time: mag === 0 ? w.reloadEmptyTime : w.reloadTime, rounds, empty: mag === 0 };
+}
+
+/** Balles déjà insérées après `elapsed` secondes d'un rechargement balle par balle */
+export function roundsInserted(weaponId, elapsed, rounds) {
+  const w = WEAPONS[weaponId];
+  if (!w.reloadPerRound) return 0;
+  return Math.max(0, Math.min(rounds, Math.floor((elapsed - w.reloadOpen) / w.reloadPerRound + 0.15)));
+}

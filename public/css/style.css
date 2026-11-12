@@ -240,7 +240,12 @@ select { font: inherit; background: rgba(0,0,0,.35); color: var(--text); border:
 
 #killfeed { position: absolute; top: 14px; right: 16px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .kf { background: rgba(0,0,0,.55); padding: 5px 10px; border-radius: 6px; font-size: 14px; font-weight: 600; animation: kfin .2s; }
-.kf .w { color: var(--muted); margin: 0 8px; font-weight: 400; }
+.kf .w { color: #fff; margin: 0 8px; font-weight: 400; display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.kicon { height: 15px; width: auto; color: #fff; filter: drop-shadow(0 1px 1px rgba(0,0,0,.8)); }
+.kicon.hs { color: #ff3b3b; height: 14px; }
+#spectate-label { position: absolute; top: 92px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.55); padding: 6px 16px;
+  border-radius: 8px; font-size: 15px; letter-spacing: .5px; }
+#spectate-label b { color: var(--accent-2); }
 .kf.me { outline: 1px solid rgba(255,255,255,.5); }
 @keyframes kfin { from { transform: translateX(20px); opacity: 0; } }
 

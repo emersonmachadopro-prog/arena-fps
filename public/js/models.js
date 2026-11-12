@@ -103,41 +103,69 @@ export function capsule(a, b, radius, material) {
 }
 
 /**
- * Main avec 4 doigts articulés + pouce.
+ * Main avec 4 doigts à 3 phalanges + pouce à 2 phalanges.
  * Repère de la main : paume vers -y, doigts vers -z, doigts répartis sur l'axe x
- * (index en x négatif). curl = pliage des doigts [phalange 1, phalange 2] en radians.
+ * (index en x positif, côté pouce). C'est une main GAUCHE : pour une main droite,
+ * mettre scale.x = -1.
+ * curl = pliage des doigts [phalange 1, 2, 3] en radians (négatif = vers la paume).
  * indexCurl = pliage spécial de l'index (pour le poser sur la détente).
  */
-export function makeHand(material, { curl = [-0.9, -1.2], indexCurl = null, thumbCurl = -0.5 } = {}) {
+export function makeHand(material, { curl = [-0.9, -1.1, -0.8], indexCurl = null, thumbCurl = -0.5, thumbSpread = -0.7 } = {}) {
+  const c3 = (c) => (c.length >= 3 ? c : [c[0], c[1], c[1] * 0.8]);
+  curl = c3(curl); if (indexCurl) indexCurl = c3(indexCurl);
   const hand = new THREE.Group();
-  hand.add(rbox(0.08, 0.028, 0.085, material, 0, 0, 0, 0.01));            // paume
-  // [position x, longueur phalange 1, longueur phalange 2] : index (côté pouce), majeur, annulaire, auriculaire
-  const fingers = [[0.0285, 0.03, 0.026], [0.0095, 0.033, 0.028], [-0.0095, 0.031, 0.027], [-0.0285, 0.026, 0.022]];
-  fingers.forEach(([x, l1, l2], i) => {
+  hand.add(rbox(0.078, 0.026, 0.082, material, 0, 0, 0, 0.011));                 // paume
+  hand.add(rbox(0.07, 0.022, 0.02, material, 0, -0.002, -0.036, 0.009));         // jointures
+  // [position x, longueurs des 3 phalanges, rayon] : index, majeur, annulaire, auriculaire
+  const fingers = [
+    [0.027, [0.024, 0.016, 0.014], 0.0085],
+    [0.009, [0.026, 0.018, 0.015], 0.0088],
+    [-0.009, [0.025, 0.017, 0.014], 0.0085],
+    [-0.027, [0.02, 0.013, 0.012], 0.0076],
+  ];
+  fingers.forEach(([x, lens, r], i) => {
     const c = i === 0 && indexCurl ? indexCurl : curl;
-    const f = new THREE.Group();
-    f.position.set(x, 0, -0.04);
-    f.rotation.x = c[0];
-    f.add(capsule([0, 0, 0], [0, 0, -l1], 0.0095, material));
-    const tip = new THREE.Group();
-    tip.position.set(0, 0, -l1);
-    tip.rotation.x = c[1];
-    tip.add(capsule([0, 0, 0], [0, 0, -l2], 0.0088, material));
-    f.add(tip);
-    hand.add(f);
+    let parent = new THREE.Group();
+    parent.position.set(x, 0, -0.04);
+    hand.add(parent);
+    lens.forEach((len, k) => {
+      const seg = new THREE.Group();
+      seg.rotation.x = c[k];
+      seg.add(capsule([0, 0, 0], [0, 0, -len], r * (1 - k * 0.08), material));
+      if (k === 0) parent.add(seg);
+      else { seg.position.set(0, 0, -lens[k - 1]); parent.add(seg); }
+      parent = seg;
+    });
   });
   // Pouce (sur le côté, en x positif)
   const th = new THREE.Group();
-  th.position.set(0.04, -0.008, -0.01);
-  th.rotation.set(0, -0.7, 0);
-  th.add(capsule([0, 0, 0], [0, 0, -0.03], 0.011, material));
+  th.position.set(0.038, -0.008, 0.0);
+  th.rotation.set(0, thumbSpread, 0);
+  th.add(capsule([0, 0, 0], [0, 0, -0.028], 0.0105, material));
   const thTip = new THREE.Group();
-  thTip.position.set(0, 0, -0.03);
+  thTip.position.set(0, 0, -0.028);
   thTip.rotation.x = thumbCurl;
-  thTip.add(capsule([0, 0, 0], [0, 0, -0.026], 0.0098, material));
+  thTip.add(capsule([0, 0, 0], [0, 0, -0.024], 0.0095, material));
   th.add(thTip);
   hand.add(th);
   return hand;
+}
+
+/**
+ * Pièce "extrudée" : on dessine le profil de côté (points [z, y]) puis on lui
+ * donne une épaisseur sur l'axe x, avec des bords arrondis. Parfait pour les
+ * crosses, poignées, chargeurs courbes, lames…
+ */
+export function extrude(points, thickness, material, bevel = 0.004) {
+  const shape = new THREE.Shape();
+  points.forEach(([z, y], i) => (i ? shape.lineTo(z, y) : shape.moveTo(z, y)));
+  shape.closePath();
+  const depth = Math.max(0.0005, thickness - bevel * 2);
+  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: 6 });
+  geo.translate(0, 0, -depth / 2);
+  const m = new THREE.Mesh(geo, material);
+  m.rotation.y = -Math.PI / 2; // le profil est dans le plan (z, y) de l'arme
+  return m;
 }
 
 /** Oriente une main avec trois axes (où vont ses axes x, y, z locaux) */

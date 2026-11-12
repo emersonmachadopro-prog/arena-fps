@@ -4,7 +4,7 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, BOT_LEVELS, validOptic } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted } from '../shared/constants.js';
 import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
@@ -340,7 +340,7 @@ export class Room {
     const p = this.players.get(id);
     if (!p || (weapon !== p.primary && weapon !== 'knife')) return;
     p.weapon = weapon;
-    p.reloadEnd = 0; // changer d'arme annule le rechargement
+    this.cancelReload(p); // changer d'arme annule le rechargement (les balles déjà mises restent)
   }
 
   onReload(id) {
@@ -348,7 +348,50 @@ export class Room {
     if (!p || !p.alive || p.weapon !== p.primary) return;
     const w = WEAPONS[p.primary];
     if (p.reloadEnd || p.mag >= w.magSize || p.reserve <= 0) return;
-    p.reloadEnd = Date.now() + w.reloadTime * 1000;
+    const plan = reloadPlan(p.primary, p.mag, p.reserve);
+    const now = Date.now();
+    p.reload = { start: now, rounds: plan.rounds };
+    p.reloadEnd = now + plan.time * 1000;
+  }
+
+  /** Interrompt un rechargement (Kar98k : on garde les balles déjà poussées) */
+  cancelReload(p) {
+    if (!p.reloadEnd) return;
+    const n = roundsInserted(p.primary, (Date.now() - p.reload.start) / 1000, p.reload.rounds);
+    p.mag += n; p.reserve -= n;
+    p.reloadEnd = 0; p.reload = null;
+    p.reloadLock = Date.now() + 250; // le temps de refermer la culasse
+  }
+
+  onReloadCancel(id) {
+    const p = this.players.get(id);
+    if (p) this.cancelReload(p);
+  }
+
+  // ---------------------------------------------------------------
+  //  Compensation de latence : on garde l'historique des positions
+  //  (1 seconde) pour vérifier un tir là où le tireur VOYAIT sa cible.
+  // ---------------------------------------------------------------
+  recordHistory(now) {
+    for (const p of this.players.values()) {
+      if (!p.hist) p.hist = [];
+      p.hist.push({ t: now, x: p.x, y: p.y, z: p.z, crouch: p.crouch });
+      while (p.hist.length > 25) p.hist.shift();
+    }
+  }
+
+  positionAt(p, t) {
+    const h = p.hist;
+    if (!h || !h.length || t >= h[h.length - 1].t) return { x: p.x, y: p.y, z: p.z, crouch: p.crouch };
+    if (t <= h[0].t) return h[0];
+    for (let i = h.length - 1; i > 0; i--) {
+      const a = h[i - 1], b = h[i];
+      if (t >= a.t) {
+        const k = (t - a.t) / (b.t - a.t || 1);
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k, z: a.z + (b.z - a.z) * k, crouch: k < 0.5 ? a.crouch : b.crouch };
+      }
+    }
+    return h[0];
   }
 
   // Le client dit "je tire dans cette direction". Le serveur vérifie tout le reste.
@@ -362,39 +405,52 @@ export class Room {
     const len = Math.hypot(d.x, d.y, d.z);
     if (len < 0.5) return;
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
+    const o = data.origin;
+    const origin = o && [o.x, o.y, o.z].every(n => typeof n === 'number' && isFinite(n)) ? o : null;
+    const rt = typeof data.rt === 'number' && isFinite(data.rt) ? data.rt : null;
 
-    this.fire(p, data.weapon, dir);
+    this.fire(p, data.weapon, dir, { origin, rt });
   }
 
-  /** Tir validé (joueur ou bot) : munitions, cadence, trajectoire, dégâts */
-  fire(p, weaponId, dir) {
+  /**
+   * Tir validé (joueur ou bot) : munitions, cadence, trajectoire, dégâts.
+   * opts.origin = position des yeux envoyée par le client (acceptée si proche de celle du serveur)
+   * opts.rt     = instant (horloge serveur) que le tireur voyait à l'écran → compensation de latence
+   */
+  fire(p, weaponId, dir, opts = {}) {
     const w = WEAPONS[weaponId];
-    const data = { weapon: weaponId };
     const now = Date.now();
     // Cadence de tir (avec une petite tolérance réseau)
     if (now - p.lastShot < w.fireInterval * 1000 * 0.8) return;
-    if (data.weapon !== 'knife') {
-      if (p.reloadEnd || p.mag <= 0) return;
+    if (weaponId !== 'knife') {
+      if (p.reloadEnd || p.mag <= 0 || (p.reloadLock && now < p.reloadLock)) return;
       p.mag--;
     }
     p.lastShot = now;
 
-    // Le tir part des yeux du joueur, à la position connue du serveur
-    const eye = { x: p.x, y: p.y + (p.crouch ? PLAYER.CROUCH_EYE : PLAYER.EYE), z: p.z };
-    const enemies = [...this.players.values()].filter(o => o.alive && o.team && o.team !== p.team);
-    const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, 0.06);
+    // Point de départ : les yeux du tireur (sa position client si elle est cohérente)
+    let eye = { x: p.x, y: p.y + (p.crouch ? PLAYER.CROUCH_EYE : PLAYER.EYE), z: p.z };
+    if (opts.origin && Math.hypot(opts.origin.x - eye.x, opts.origin.y - eye.y, opts.origin.z - eye.z) < 2) eye = opts.origin;
 
-    // Les autres joueurs voient le tir (traçante, son)
+    // Les cibles sont replacées là où le tireur les voyait (max 400 ms en arrière)
+    const t = opts.rt ? Math.max(now - 400, Math.min(now, opts.rt)) : now;
+    const enemies = [...this.players.values()]
+      .filter(o => o.alive && o.team && o.team !== p.team)
+      .map(o => ({ id: o.id, ...this.positionAt(o, t) }));
+    const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, 0.1);
+
+    // Tout le monde voit le tir (traçante, son, sang si touché)
     const endDist = hit ? hit.dist : Math.min(wallDist, w.range);
-    this.io.to(this.code).emit('shot', { id: p.id, weapon: data.weapon, from: eye, dir, dist: endDist, hitWall: !hit && wallDist < w.range });
+    const point = { x: eye.x + dir.x * endDist, y: eye.y + dir.y * endDist, z: eye.z + dir.z * endDist };
+    this.io.to(this.code).emit('shot', { id: p.id, weapon: weaponId, from: eye, dir, dist: endDist, point, hitPlayer: !!hit, hitWall: !hit && wallDist < w.range });
 
-    if (hit) this.damage(p, this.players.get(hit.id), hit.headshot ? w.headDamage : w.damage, hit.headshot, data.weapon);
+    if (hit) this.damage(p, this.players.get(hit.id), hit.headshot ? w.headDamage : w.damage, hit.headshot, weaponId, point);
   }
 
-  damage(attacker, victim, amount, headshot, weapon) {
+  damage(attacker, victim, amount, headshot, weapon, point) {
     if (!victim || !victim.alive) return;
     victim.hp = Math.max(0, victim.hp - amount);
-    this.io.to(attacker.id).emit('hitConfirm', { headshot, kill: victim.hp <= 0 });
+    this.io.to(attacker.id).emit('hitConfirm', { headshot, kill: victim.hp <= 0, point });
     this.io.to(victim.id).emit('damaged', { from: { x: attacker.x, z: attacker.z }, hp: victim.hp });
     if (victim.hp <= 0) {
       victim.alive = false;
@@ -417,11 +473,11 @@ export class Room {
     // Rechargements terminés
     for (const p of this.players.values()) {
       if (p.reloadEnd && now >= p.reloadEnd) {
-        const need = WEAPONS[p.primary].magSize - p.mag;
-        const take = Math.min(need, p.reserve);
-        p.mag += take; p.reserve -= take; p.reloadEnd = 0;
+        const take = Math.min(p.reload?.rounds ?? WEAPONS[p.primary].magSize - p.mag, p.reserve);
+        p.mag += take; p.reserve -= take; p.reloadEnd = 0; p.reload = null;
       }
     }
+    this.recordHistory(now);
 
     // Intelligence des bots
     for (const p of this.players.values()) {
@@ -440,6 +496,7 @@ export class Room {
 
     // Snapshot envoyé à tout le monde
     this.io.to(this.code).volatile.emit('state', {
+      t: now, // horloge du serveur (pour l'interpolation et la compensation de latence)
       phase: this.phase,
       timeLeft: Math.max(0, (this.phaseEnd - now) / 1000),
       round: this.round,

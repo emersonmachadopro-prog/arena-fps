@@ -206,5 +206,10 @@ Le navigateur envoie seulement « je suis ici » et « je tire dans cette direct
 Le serveur vérifie la cadence de tir, les munitions, la vitesse de déplacement, recalcule le tir
 depuis la position qu'il connaît (en tenant compte des murs) et décide seul des dégâts, des kills et du score.
 
+**Compensation de latence :** chaque tir indique l'instant affiché sur l'écran du tireur. Le serveur garde
+1 seconde d'historique des positions et vérifie la touche là où le tireur voyait vraiment sa cible
+(sinon, à cause du délai réseau, une balle qui touche à l'écran peut passer à côté sur le serveur).
+Les autres joueurs sont affichés avec 100 ms de retard volontaire pour que leurs mouvements soient fluides.
+
 ### Debug
 Ouvre `http://localhost:3000/?debug` puis la console (F12) : l'objet `DEBUG` donne accès au joueur et à la partie.

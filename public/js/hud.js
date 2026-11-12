@@ -89,8 +89,9 @@ export class HUD {
     const row = document.createElement('div');
     row.className = 'kf' + (mine ? ' me' : '');
     const k = document.createElement('span'); k.textContent = killer; k.style.color = TEAMS[killerTeam]?.css;
+    // Icône de l'arme + petite croix rouge si le dernier tir était dans la tête
     const w = document.createElement('span'); w.className = 'w';
-    w.textContent = ({ knife: '🔪', kar98k: '━╤⌐', ak: '▬╦' }[weapon] || '▬╦') + (headshot ? ' ◎' : '');
+    w.innerHTML = (KILL_ICONS[weapon] || KILL_ICONS.ak) + (headshot ? KILL_ICONS.headshot : '');
     const v = document.createElement('span'); v.textContent = victim; v.style.color = TEAMS[victimTeam]?.css;
     row.append(k, w, v);
     this.feedRow(row);
@@ -120,6 +121,14 @@ export class HUD {
 
   clearFeed() { $('killfeed').innerHTML = ''; this.message(''); }
 }
+
+// Petits dessins pour le killfeed (blancs, comme dans CS / Valorant)
+const KILL_ICONS = {
+  ak: `<svg viewBox="0 0 64 18" class="kicon"><path d="M2 8 L14 6 L16 12 L6 15 L2 14 Z M14 5 H34 V10 H14 Z M33 6 H44 V9 H33 Z M44 7 H60 V8.5 H44 Z M24 10 H28 L30 17 H26 Z M18 10 H21 L20 14 H17 Z" fill="currentColor"/></svg>`,
+  kar98k: `<svg viewBox="0 0 76 18" class="kicon"><path d="M2 9 L16 7 L19 10 L52 10 L52 12 L18 13 L13 15 L2 15 Z M16 7 H30 V10 H16 Z M50 10 H74 V11.2 H50 Z M20 3 H36 V6 H20 Z M24 6 H26 V7.5 H24 Z M31 6 H33 V7.5 H31 Z" fill="currentColor"/></svg>`,
+  knife: `<svg viewBox="0 0 48 18" class="kicon"><path d="M2 8 H16 V12 H2 Z M16 6 H19 V14 H16 Z M19 8 L40 8 L46 10 L40 12 L19 12 Z" fill="currentColor"/></svg>`,
+  headshot: `<svg viewBox="0 0 18 18" class="kicon hs"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 1 V5 M9 13 V17 M1 9 H5 M13 9 H17" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/></svg>`,
+};
 
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
