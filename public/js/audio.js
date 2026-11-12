@@ -7,7 +7,7 @@
 // =====================================================================
 import { settings, onSettingsChange } from './settings.js';
 
-let ctx = null, master = null, reverbIn = null, noiseBuf = null;
+let ctx = null, master = null, sfxBus = null, reverbIn = null, noiseBuf = null;
 
 // ---------------------------------------------------------------------
 //  Sons enregistrés (dossier public/sounds/, générés avec ElevenLabs).
@@ -18,9 +18,22 @@ const SAMPLE_NAMES = [
   'mag_out', 'mag_in', 'charge_back', 'charge_release', 'bolt_open', 'bolt_close', 'round_in',
   'weapon_switch', 'knife_flip', 'step_1', 'step_2', 'step_3', 'land', 'slide', 'hurt',
   'bullet_impact', 'round_start', 'round_win', 'round_lose',
+  'glock_shot', 'glock_shot_far', 'pistol_mag_out', 'pistol_mag_in', 'pistol_slide', 'shell_casing',
   // Optionnels : ajoute 'hitmarker', 'headshot', 'kill', 'ui_click' ici si tu mets ces fichiers dans public/sounds/
 ];
 const buffers = {};
+
+// Mixage : volume de chaque son par rapport aux autres (1 = référence = tir d'AK).
+// C'est ici qu'on équilibre si un son paraît trop fort ou trop faible.
+const MIX = {
+  ak_shot: 1, ak_shot_far: 0.9, kar_shot: 1, kar_shot_far: 0.9, glock_shot: 0.8, glock_shot_far: 0.75,
+  knife_swing: 0.45, empty_click: 0.35, knife_flip: 0.3,
+  mag_out: 0.32, mag_in: 0.38, charge_back: 0.32, charge_release: 0.38, bolt_open: 0.35, bolt_close: 0.38, round_in: 0.3,
+  pistol_mag_out: 0.3, pistol_mag_in: 0.35, pistol_slide: 0.35, shell_casing: 0.18,
+  weapon_switch: 0.3, step_1: 0.5, step_2: 0.45, step_3: 0.5, land: 0.35, slide: 0.3,
+  hurt: 0.4, bullet_impact: 0.3, round_start: 0.22, round_win: 0.35, round_lose: 0.35,
+  hitmarker: 0.35, headshot: 0.4, kill: 0.4, ui_click: 0.25,
+};
 
 function loadSamples() {
   for (const name of SAMPLE_NAMES) {
@@ -43,7 +56,7 @@ function sample(name, pos = null, { vol = 1, reverb = 0.1, far = 60, ref = 2.5, 
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.playbackRate.value = 1 + (Math.random() * 2 - 1) * pitch; // légère variation : moins répétitif
-  src.connect(output(pos, vol, reverb, far, ref));
+  src.connect(output(pos, vol * (MIX[name] ?? 1), reverb, far, ref));
   src.start();
   return true;
 }
@@ -60,6 +73,9 @@ export function initAudio() {
   master = ctx.createGain();
   master.gain.value = settings.volume;
   master.connect(comp);
+  sfxBus = ctx.createGain();             // tous les bruitages passent par ici (réglage "Effets")
+  sfxBus.gain.value = settings.sfxVolume ?? 0.8;
+  sfxBus.connect(master);
 
   // Bruit blanc réutilisable (base de la plupart des sons)
   noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
@@ -77,11 +93,41 @@ export function initAudio() {
   conv.buffer = ir;
   reverbIn = ctx.createGain(); reverbIn.gain.value = 0.35;
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3500;
-  reverbIn.connect(conv).connect(lp).connect(master);
+  reverbIn.connect(conv).connect(lp).connect(sfxBus);
 
   loadSamples();
 }
-onSettingsChange(s => { if (master) master.gain.value = s.volume; });
+onSettingsChange(s => {
+  if (master) master.gain.value = s.volume;
+  if (sfxBus) sfxBus.gain.value = s.sfxVolume ?? 0.8;
+  if (music) music.volume = musicTarget();
+});
+
+// ---------------------------------------------------------------------
+//  Musique des menus (fichier public/sounds/lobby_music.mp3, en boucle)
+// ---------------------------------------------------------------------
+let music = null, musicFade = null, musicWanted = false;
+const musicTarget = () => Math.max(0, Math.min(1, (settings.volume ?? 0.7) * (settings.musicVolume ?? 0.35)));
+
+export function playMusic(on) {
+  musicWanted = on;
+  if (!music) {
+    music = new Audio('/sounds/lobby_music.mp3');
+    music.loop = true;
+    music.volume = 0;
+  }
+  clearInterval(musicFade);
+  if (on) music.play().catch(() => {}); // le navigateur peut refuser avant le premier clic
+  // Fondu en douceur
+  musicFade = setInterval(() => {
+    const target = musicWanted ? musicTarget() : 0;
+    const v = music.volume + Math.sign(target - music.volume) * 0.02;
+    music.volume = Math.max(0, Math.min(1, Math.abs(target - v) < 0.02 ? target : v));
+    if (music.volume === target) { clearInterval(musicFade); if (!musicWanted) music.pause(); }
+  }, 40);
+}
+// Le navigateur bloque le son avant la première interaction : on relance au premier clic
+addEventListener('pointerdown', () => { if (musicWanted && music?.paused) music.play().catch(() => {}); }, { capture: true });
 
 /** Position/orientation de l'auditeur = la caméra (à appeler à chaque image) */
 export function setListener(camera) {
@@ -115,8 +161,8 @@ function output(pos, vol = 1, reverb = 0.2, far = 60, ref = 2.5) {
     pan.refDistance = ref; pan.rolloffFactor = 1.1; pan.maxDistance = far;
     if (pan.positionX) { pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z; }
     else pan.setPosition(pos.x, pos.y, pos.z);
-    g.connect(pan).connect(master);
-  } else g.connect(master);
+    g.connect(pan).connect(sfxBus);
+  } else g.connect(sfxBus);
   if (reverb > 0) {
     const r = ctx.createGain(); r.gain.value = reverb;
     g.connect(r).connect(reverbIn);
@@ -156,6 +202,53 @@ function metal(dest, t, vol = 0.4, freq = 3200) {
   tone(dest, { t, dur: 0.05, freq: freq * 0.8, vol: vol * 0.25, type: 'triangle' });
 }
 
+// ---------------------------------------------------------------------
+//  Packs de sons de kill (créations originales)
+// ---------------------------------------------------------------------
+function bell(dest, t, freq, vol, dur = 0.5) {
+  tone(dest, { t, dur, freq, vol, type: 'sine' });
+  tone(dest, { t, dur: dur * 0.6, freq: freq * 2.01, vol: vol * 0.35, type: 'sine' });   // harmonique
+  tone(dest, { t, dur: dur * 0.3, freq: freq * 3.02, vol: vol * 0.15, type: 'triangle' });
+}
+const KILL_PACKS = {
+  // "Classique" : un son cristallin qui monte d'une marche à chaque kill
+  classic(n) {
+    const out = output(null, 0.5, 0.25);
+    const notes = [349.2, 440, 523.3, 659.3]; // fa, la, do, mi
+    if (n <= 4) {
+      noise(out, { dur: 0.12, type: 'bandpass', freq: 1500 + n * 600, sweep: 6000, q: 1.5, vol: 0.12, attack: 0.01 }); // "swish"
+      bell(out, 0.01, notes[n - 1], 0.5, 0.45 + n * 0.05);
+      if (n >= 3) bell(out, 0.07, notes[n - 1] * 1.5, 0.22, 0.4);
+    } else {
+      // 5e kill : petite fanfare montante
+      [523.3, 659.3, 784, 1046.5].forEach((f, i) => bell(out, i * 0.07, f, 0.38, 0.6));
+      noise(out, { t: 0.25, dur: 0.6, type: 'highpass', freq: 5000, vol: 0.08, attack: 0.05 }); // scintillement
+    }
+  },
+  // "Néon" : synthé électronique, accord qui grimpe
+  neon(n) {
+    const out = output(null, 0.45, 0.2);
+    const base = [196, 246.9, 293.7, 370][Math.min(n, 4) - 1];
+    if (n <= 4) {
+      tone(out, { dur: 0.22, freq: base, end: base * 1.02, vol: 0.35, type: 'sawtooth' });
+      tone(out, { t: 0.04, dur: 0.25, freq: base * 2, vol: 0.22, type: 'square' });
+      noise(out, { dur: 0.08, type: 'bandpass', freq: 3000 + n * 800, q: 3, vol: 0.12 });
+    } else {
+      [392, 493.9, 587.3, 784].forEach((f, i) => tone(out, { t: i * 0.06, dur: 0.3, freq: f, end: f * 1.01, vol: 0.25, type: 'sawtooth' }));
+      tone(out, { t: 0.24, dur: 0.6, freq: 1568, end: 1600, vol: 0.12, type: 'triangle' });
+    }
+  },
+  // "Impact" : coup sourd + clochette, plus discret
+  impact(n) {
+    const out = output(null, 0.55, 0.15);
+    tone(out, { dur: 0.12, freq: 70 + n * 12, end: 40, vol: 0.6 });
+    noise(out, { dur: 0.06, type: 'lowpass', freq: 900, vol: 0.35 });
+    bell(out, 0.02, [523.3, 587.3, 659.3, 784, 1046.5][n - 1], 0.25, n === 5 ? 0.9 : 0.35);
+    if (n === 5) bell(out, 0.12, 1568, 0.18, 0.7);
+  },
+};
+export const KILL_SOUND_PACKS = { classic: 'Classique', neon: 'Néon', impact: 'Impact' };
+
 // Distance d'un son jusqu'à l'auditeur (pour assourdir les tirs lointains)
 function distTo(pos) {
   if (!pos || !ctx) return 0;
@@ -189,6 +282,31 @@ export const sfx = {
     noise(out, { dur: 0.2, type: 'bandpass', freq: 450, q: 1, vol: 0.9 });
     tone(out, { dur: 0.35, freq: 110, end: 30, vol: 1.0 });
   },
+  /** Tir de Glock 18 */
+  pistol(pos = null) {
+    if (!ctx) return;
+    const d = distTo(pos);
+    if (sample(pos && d > 25 ? 'glock_shot_far' : 'glock_shot', pos, { vol: pos ? 1.2 : 0.9, ref: 8, far: 110, reverb: 0.1 })) return;
+    const out = output(pos, 0.8, 0.35, 100);
+    noise(out, { dur: 0.03, type: 'highpass', freq: 2600, vol: 0.8 });
+    noise(out, { dur: 0.12, type: 'lowpass', freq: 5000, sweep: 500, vol: 0.8 });
+    tone(out, { dur: 0.08, freq: 220, end: 70, vol: 0.6 });
+  },
+  pistolMagOut(pos) { if (!ctx || sample('pistol_mag_out', pos, { far: 20, ref: 2 })) return; this.magOut(pos); },
+  pistolMagIn(pos) { if (!ctx || sample('pistol_mag_in', pos, { far: 20, ref: 2 })) return; this.magIn(pos); },
+  pistolSlide(pos) { if (!ctx || sample('pistol_slide', pos, { far: 20, ref: 2 })) return; this.chargeRelease(pos); },
+  /** Douille qui tombe et rebondit sur le sol */
+  shell(pos) { if (!ctx || sample('shell_casing', pos, { far: 15, ref: 1.5, pitch: 0.18 })) return; metal(output(pos, 0.3, 0, 15), 0, 0.2, 5200); },
+
+  /**
+   * Son de kill qui monte à chaque élimination de la manche (1 → 5).
+   * Plusieurs "packs" possibles : plus tard, chaque skin pourra avoir le sien.
+   */
+  killStreak(n, pack = settings.killSound) {
+    if (!ctx) return;
+    (KILL_PACKS[pack] || KILL_PACKS.classic)(Math.max(1, Math.min(5, n)));
+  },
+
   knife(pos = null) {
     if (!ctx) return;
     if (sample('knife_swing', pos, { vol: 0.9, far: 20 })) return;
@@ -234,6 +352,7 @@ export const sfx = {
   remoteReload(pos, weapon) {
     if (!ctx) return;
     if (weapon === 'kar98k') { this.boltUp(pos); setTimeout(() => this.boltBack(pos), 200); setTimeout(() => this.roundIn(pos), 700); }
+    else if (weapon === 'glock') { this.pistolMagOut(pos); setTimeout(() => this.pistolMagIn(pos), 700); }
     else { this.magOut(pos); setTimeout(() => this.magIn(pos), 900); }
   },
 

@@ -11,13 +11,14 @@ import { HUD } from './hud.js';
 import { SoloSession } from './solo.js';
 import { NetGame } from './net.js';
 import { Showcase } from './showcase.js';
-import { initAudio, setListener, sfx } from './audio.js';
+import { LocalBody } from './body.js';
+import { initAudio, setListener, sfx, playMusic } from './audio.js';
 import { escapeHtml } from './hud.js';
 import { settings, saveSettings, keyLabel, activeLoadout } from './settings.js';
 import { WEAPONS } from '/shared/constants.js';
 import {
   $, showScreen, currentScreen, toast, initSettingsMenu, renderLobby, renderEnd,
-  initTabs, showTab, initSkinGrid, initInventory, renderLoadoutCards, renderMainSide,
+  initTabs, showTab, initCharacterGrid, initInventory, renderLoadoutCards, renderMainSide,
 } from './ui.js';
 
 // ---------------- Création des briques du jeu ----------------
@@ -28,6 +29,7 @@ const hud = new HUD();
 const player = new LocalPlayer(world.camera);
 const weapons = new WeaponSystem(world.vmScene, world.vmCamera, world.camera, effects);
 const showcase = new Showcase(world.scene, world.camera);
+const localBody = new LocalBody(world.scene); // nos jambes + notre ombre
 weapons.setVisible(false);
 
 const ctx = { scene: world.scene, camera: world.camera, effects, hud, player, weapons };
@@ -67,6 +69,7 @@ function refreshShowcase() {
 // ---------------- Lancer / quitter ----------------
 function enterGame(needClick) {
   showcase.hide();
+  playMusic(false);
   input.enabled = true;
   hud.show(true);
   if (needClick) showScreen('menu-click');
@@ -81,6 +84,7 @@ function startSolo(botsShoot) {
 }
 
 function leaveGameView() {
+  playMusic(true);
   input.enabled = false;
   input.unlock();
   hud.show(false);
@@ -175,7 +179,7 @@ function onGearChange() {
   refreshShowcase();
 }
 // Onglet Personnage (skins)
-const renderSkins = initSkinGrid(document.querySelector('#tab-skins .locker-tabs'), $('locker-grid'), onGearChange);
+const renderSkins = initCharacterGrid($('locker-grid'), onGearChange);
 // Onglet Inventaire (loadouts)
 const renderInventory = initInventory(onGearChange);
 
@@ -191,7 +195,7 @@ $('btn-ready').onclick = () => {
 $('btn-leave').onclick = quitToMenu;
 $('lobby-loadout-select').onchange = (e) => { settings.activeLoadout = +e.target.value; saveSettings(); onGearChange(); };
 // Skins depuis le lobby
-const renderLobbySkins = initSkinGrid($('lobby-locker-tabs'), $('lobby-locker-grid'), onGearChange);
+const renderLobbySkins = initCharacterGrid($('lobby-locker-grid'), onGearChange);
 $('btn-lobby-skins').onclick = () => { renderLobbySkins(); showScreen('menu-lobby-skins'); };
 $('btn-lobby-skins-back').onclick = () => { showScreen('menu-lobby'); drawLobby(); };
 
@@ -255,6 +259,7 @@ renderMainSide();
 showTab('play');
 showScreen('menu-main');
 refreshShowcase();
+playMusic(true); // musique des menus (démarre au premier clic si le navigateur bloque)
 
 // ---------------- Boucle de jeu ----------------
 let last = performance.now();
@@ -283,12 +288,13 @@ function loop() {
       weapons.update(dt, input, player, session, session.canFire() && input.locked);
     }
     session.update(dt);
+    localBody.update(dt, player, weapons.current, settings.skins, !!session && player.alive && !spec, session === net ? (net.myTeam || 'A') : 'A');
     setListener(world.camera); // le son 3D suit la caméra
     hud.update(spec ? {
-      hp: spec.hp, weapon: spec.weapon, primary: spec.primary, ads: 0, optic: null, overlay: null,
+      hp: spec.hp, weapon: spec.weapon, primary: spec.primary, secondary: spec.secondary || 'glock', ads: 0, optic: null, overlay: null,
       mag: spec.mag, reserve: spec.reserve, reloading: spec.reloading, spread: 0.02, ...session.hudState(),
     } : {
-      hp: player.hp, weapon: weapons.current, primary: weapons.primary, ads: weapons.ads,
+      hp: player.hp, weapon: weapons.current, primary: weapons.primary, secondary: weapons.secondary, ads: weapons.ads,
       optic: weapons.currentOptic, overlay: player.alive ? weapons.overlay : null,
       mag: weapons.mag, reserve: weapons.reserve, reloading: weapons.reloading, spread: weapons.lastSpread,
       ...session.hudState(),
@@ -300,6 +306,7 @@ function loop() {
     if (!player.alive && !spec && session === net) weapons.setVisible(false);
     $('dead-key').textContent = keyLabel(settings.keys.loadout);
   } else {
+    localBody.update(dt, player, null, settings.skins, false);
     showcase.update(dt);
   }
 
@@ -311,5 +318,5 @@ loop();
 
 // Outil de debug : ouvre http://localhost:3000/?debug pour accéder au jeu depuis la console (F12)
 if (new URLSearchParams(location.search).has('debug')) {
-  window.DEBUG = { ctx, input, showcase, get session() { return session; }, get net() { return net; }, startSolo };
+  window.DEBUG = { ctx, input, showcase, localBody, world, get session() { return session; }, get net() { return net; }, startSolo };
 }

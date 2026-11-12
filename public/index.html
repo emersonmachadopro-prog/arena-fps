@@ -23,7 +23,7 @@
     <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><b></b></div>
     <div id="midscope" class="hidden"><i class="chev"></i><i class="line"></i></div>
     <div id="reddot" class="hidden"></div>
-    <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+    <canvas id="crosshair" width="160" height="160"></canvas>
     <div id="hitmarker"></div>
     <div id="damage-vignette"></div>
     <div id="damage-arrow"></div>
@@ -45,7 +45,7 @@
     <div id="ammo-box">
       <div id="weapon-name">AK-47</div>
       <div><span id="ammo-mag">30</span><span id="ammo-res"> / 90</span></div>
-      <div id="weapon-slots"><span>1 AK-47</span><span>2 Couteau</span></div>
+      <div id="weapon-slots"><span>1 AK-47</span><span>2 Glock 18</span><span>3 Couteau</span></div>
     </div>
 
     <div id="scoreboard" class="hidden"></div>
@@ -95,83 +95,80 @@
         </div>
       </div>
 
-      <!-- Onglet PERSONNAGE (skins) -->
+      <!-- Onglet PERSONNAGE (tenue du personnage uniquement) -->
       <div class="tab-page hidden" id="tab-skins">
         <div class="left-col wide-col">
           <div class="card">
-            <div class="card-title">🎨 Skins</div>
-            <div class="locker-tabs">
-              <button data-tab="character" class="active">Tenue</button>
-              <button data-tab="ak">AK-47</button>
-              <button data-tab="kar98k">Kar98k</button>
-              <button data-tab="knife">Couteau</button>
-            </div>
+            <div class="card-title">🧍 Tenue du personnage</div>
+            <p class="hint">Les skins d'armes sont dans l'Inventaire.</p>
             <div id="locker-grid" class="skin-grid"></div>
           </div>
         </div>
       </div>
 
-      <!-- Onglet INVENTAIRE (loadouts) -->
-      <div class="tab-page hidden" id="tab-inventory">
-        <div class="left-col">
-          <div class="card">
-            <div class="card-title">🎒 Mes loadouts</div>
-            <div id="loadout-list" class="loadout-list"></div>
+      <!-- Onglet INVENTAIRE (loadouts façon "armurerie") -->
+      <div class="tab-page hidden inventory-page" id="tab-inventory">
+        <div class="inv-loadouts">
+          <div class="card-title">Loadouts</div>
+          <div id="loadout-list" class="loadout-list"></div>
+        </div>
+        <div class="inv-main">
+          <div class="inv-head">
+            <input class="editor-name" id="lo-name" maxlength="24" />
+            <button class="big" id="lo-equip">Équiper</button>
+          </div>
+          <div id="cat-row" class="cat-row"></div>
+          <div id="cat-detail" class="cat-detail"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Lobby (le salon) : les personnages en 3D au centre, une équipe de chaque côté -->
+    <section id="menu-lobby" class="screen lobby-screen hidden">
+      <header class="lobby-top">
+        <div class="logo small">ARENA<span>STRIKE</span></div>
+        <div class="segmented">
+          <button class="mode-btn" data-mode="1v1">1 vs 1</button>
+          <button class="mode-btn" data-mode="2v2">2 vs 2</button>
+        </div>
+        <span id="mode-hint" class="hint"></span>
+        <div class="lobby-code-box">
+          <div><div class="kicker">Code du salon</div><div id="lobby-code" class="big-code">-----</div></div>
+          <div class="col tight">
+            <button id="btn-copy-code" class="small">📋 Copier le code</button>
+            <button id="btn-copy-link" class="small">🔗 Copier le lien</button>
           </div>
         </div>
-        <div class="right-col wide-col">
-          <div class="card" id="loadout-editor"></div>
+      </header>
+      <div id="net-warning" class="net-warning hidden"></div>
+      <div class="lobby-body">
+        <div class="team A">
+          <div class="team-head"><div><div class="kicker">Équipe</div><h3>Violet</h3></div><button class="join-team small" data-team="A">Rejoindre</button></div>
+          <ul id="team-A"></ul>
+        </div>
+        <div class="lobby-center"><div class="vs-badge">VS</div><div id="spectators" class="hint"></div></div>
+        <div class="team B">
+          <div class="team-head"><div><div class="kicker">Équipe</div><h3>Orange</h3></div><button class="join-team small" data-team="B">Rejoindre</button></div>
+          <ul id="team-B"></ul>
         </div>
       </div>
+      <footer class="lobby-bottom">
+        <div class="lobby-loadout">
+          <div class="kicker">Mon loadout</div>
+          <div class="row tight"><select id="lobby-loadout-select"></select><button id="btn-lobby-skins" class="small">🧍 Personnage</button></div>
+        </div>
+        <div class="ready-wrap">
+          <button id="btn-ready" class="ready-btn">Prêt</button>
+          <p id="lobby-status" class="hint center"></p>
+        </div>
+        <div class="lobby-right"><button id="btn-leave" class="ghost">⟵ Quitter le salon</button></div>
+      </footer>
     </section>
 
-    <!-- Lobby (le salon) : panneau à gauche, les personnages en 3D à droite -->
-    <section id="menu-lobby" class="side-panel hidden">
-      <div class="lobby-head">
-        <div>
-          <div class="kicker">Code du salon</div>
-          <div id="lobby-code" class="big-code">-----</div>
-        </div>
-        <div class="col tight">
-          <button id="btn-copy-code" class="small">📋 Copier le code</button>
-          <button id="btn-copy-link" class="small">🔗 Copier le lien</button>
-        </div>
-      </div>
-
-      <div class="segmented">
-        <button class="mode-btn" data-mode="1v1">1 vs 1</button>
-        <button class="mode-btn" data-mode="2v2">2 vs 2</button>
-        <span id="mode-hint" class="hint"></span>
-      </div>
-
-      <div class="teams stacked">
-        <div class="team A"><div class="team-head"><h3>Équipe Violet</h3><button class="join-team small" data-team="A">Rejoindre</button></div><ul id="team-A"></ul></div>
-        <div class="team B"><div class="team-head"><h3>Équipe Orange</h3><button class="join-team small" data-team="B">Rejoindre</button></div><ul id="team-B"></ul></div>
-      </div>
-      <div id="spectators" class="hint"></div>
-
-      <div class="lobby-loadout">
-        <span class="hint">Mon loadout</span>
-        <select id="lobby-loadout-select"></select>
-        <button id="btn-lobby-skins" class="small">🎨 Skins</button>
-      </div>
-
-      <div class="lobby-actions">
-        <button id="btn-ready" class="big primary">Prêt</button>
-        <button id="btn-leave" class="ghost">Quitter</button>
-      </div>
-      <p id="lobby-status" class="hint center"></p>
-    </section>
-
-    <!-- Skins depuis le lobby -->
+    <!-- Personnage depuis le lobby -->
     <section id="menu-lobby-skins" class="side-panel hidden">
-      <h2>🎨 Skins</h2>
-      <div class="locker-tabs" id="lobby-locker-tabs">
-        <button data-tab="character" class="active">Tenue</button>
-        <button data-tab="ak">AK-47</button>
-        <button data-tab="kar98k">Kar98k</button>
-        <button data-tab="knife">Couteau</button>
-      </div>
+      <h2>🧍 Personnage</h2>
+      <p class="hint">Les skins d'armes se changent dans l'Inventaire (menu principal).</p>
       <div id="lobby-locker-grid" class="skin-grid"></div>
       <div class="row"><button id="btn-lobby-skins-back" class="primary big">Retour au salon</button></div>
     </section>
@@ -199,26 +196,70 @@
     <!-- Paramètres -->
     <section id="menu-settings" class="panel wide hidden">
       <h2>⚙ Paramètres</h2>
-      <div class="settings-grid">
-        <div>
-          <h3>Touches</h3>
-          <p class="hint">Clique sur une touche puis appuie sur la nouvelle (Échap pour annuler). Tir = clic gauche, viser = clic droit.</p>
-          <div id="keybinds"></div>
-        </div>
-        <div>
-          <h3>Souris & affichage</h3>
-          <label class="slider">Sensibilité <input type="range" id="set-sens" min="0.1" max="4" step="0.05" /><output id="out-sens"></output></label>
-          <label class="slider">Champ de vision (FOV) <input type="range" id="set-fov" min="60" max="110" step="1" /><output id="out-fov"></output></label>
-          <label class="slider">Volume <input type="range" id="set-vol" min="0" max="1" step="0.01" /><output id="out-vol"></output></label>
-          <label class="check"><input type="checkbox" id="set-invert" /> Inverser l'axe vertical</label>
-          <label class="check"><input type="checkbox" id="set-fullscreen" /> Plein écran en jeu <span class="hint">(bloque Ctrl+W sur Chrome/Edge/Opera)</span></label>
-          <div class="row"><button id="btn-reset-settings" class="ghost small">Valeurs par défaut</button></div>
+      <div class="settings-tabs">
+        <button data-stab="controls" class="active">Commandes</button>
+        <button data-stab="audio">Son & graphismes</button>
+        <button data-stab="crosshair">Viseur</button>
+      </div>
+      <div class="stab" id="stab-controls">
+        <div class="settings-grid">
+          <div>
+            <h3>Touches</h3>
+            <p class="hint">Clique sur une action puis appuie sur une touche <b>ou un bouton de la souris</b> (clic molette, boutons latéraux, molette). Échap pour annuler.</p>
+            <div id="keybinds"></div>
+          </div>
+          <div>
+            <h3>Souris</h3>
+            <label class="slider">Sensibilité <input type="range" id="set-sens" min="0.1" max="4" step="0.05" /><output id="out-sens"></output></label>
+            <label class="check"><input type="checkbox" id="set-invert" /> Inverser l'axe vertical</label>
+            <h3>Affichage</h3>
+            <label class="slider">Champ de vision (FOV) <input type="range" id="set-fov" min="60" max="110" step="1" /><output id="out-fov"></output></label>
+            <label class="check"><input type="checkbox" id="set-fullscreen" /> Plein écran en jeu <span class="hint">(bloque Ctrl+W sur Chrome/Edge/Opera)</span></label>
+          </div>
         </div>
       </div>
-      <div class="row"><button id="btn-settings-back" class="primary big">Retour</button></div>
+      <div class="stab hidden" id="stab-audio">
+        <div class="settings-grid">
+          <div>
+            <h3>Volumes</h3>
+            <label class="slider">Général <input type="range" id="set-vol" min="0" max="1" step="0.01" /><output id="out-vol"></output></label>
+            <label class="slider">Effets (tirs, pas…) <input type="range" id="set-sfx" min="0" max="1" step="0.01" /><output id="out-sfx"></output></label>
+            <label class="slider">Musique des menus <input type="range" id="set-music" min="0" max="1" step="0.01" /><output id="out-music"></output></label>
+            <h3>Sons de kill</h3>
+            <div class="row tight"><select id="set-killsound"></select><button id="btn-test-kill" class="small">▶ Écouter (1 → 5)</button></div>
+          </div>
+          <div>
+            <h3>Qualité graphique</h3>
+            <div class="segmented" id="set-graphics">
+              <button data-q="low">Basse</button><button data-q="medium">Moyenne</button><button data-q="high">Haute</button>
+            </div>
+            <p class="hint" id="graphics-hint"></p>
+          </div>
+        </div>
+      </div>
+      <div class="stab hidden" id="stab-crosshair">
+        <div class="settings-grid">
+          <div class="ch-preview-box">
+            <canvas id="ch-preview" width="220" height="220"></canvas>
+            <div class="ch-bg-row"><button data-bg="sky" class="small">Ciel</button><button data-bg="wall" class="small">Mur</button><button data-bg="dark" class="small">Sombre</button></div>
+          </div>
+          <div>
+            <label class="slider">Forme <select id="ch-style"></select><span></span></label>
+            <label class="slider">Couleur <input type="color" id="ch-color" /><span id="ch-swatches" class="swatches"></span></label>
+            <label class="slider">Longueur <input type="range" id="ch-size" min="0" max="24" step="1" /><output></output></label>
+            <label class="slider">Écart <input type="range" id="ch-gap" min="0" max="20" step="1" /><output></output></label>
+            <label class="slider">Épaisseur <input type="range" id="ch-thickness" min="1" max="6" step="1" /><output></output></label>
+            <label class="slider">Opacité <input type="range" id="ch-opacity" min="0.2" max="1" step="0.05" /><output></output></label>
+            <label class="check"><input type="checkbox" id="ch-outline" /> Contour noir</label>
+            <label class="check"><input type="checkbox" id="ch-dot" /> Point au centre</label>
+            <label class="check"><input type="checkbox" id="ch-dynamic" /> Dynamique (s'écarte quand on bouge / tire)</label>
+          </div>
+        </div>
+      </div>
+      <div class="row"><button id="btn-settings-back" class="primary big">Retour</button><button id="btn-reset-settings" class="ghost small">Valeurs par défaut</button></div>
     </section>
 
-    <!-- Fin de partie -->
+    
     <section id="menu-end" class="panel hidden">
       <h2 id="end-title" class="center">Victoire !</h2>
       <div id="end-score" class="end-score"></div>

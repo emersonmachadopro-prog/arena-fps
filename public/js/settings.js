@@ -2,10 +2,15 @@
 //  settings.js — Paramètres du joueur, sauvegardés dans le navigateur
 //  (localStorage). Les touches utilisent "event.code", c'est-à-dire la
 //  position physique de la touche : ZQSD sur AZERTY = WASD sur QWERTY.
+//  Les boutons de la souris sont aussi utilisables : Mouse0 (gauche),
+//  Mouse1 (molette), Mouse2 (droit), Mouse3/Mouse4 (boutons latéraux),
+//  WheelUp / WheelDown (molette).
 // =====================================================================
 
 // [identifiant, libellé affiché, touche par défaut]
 export const ACTIONS = [
+  ['fire', 'Tirer', 'Mouse0'],
+  ['ads', 'Viser', 'Mouse2'],
   ['forward', 'Avancer', 'KeyW'],
   ['back', 'Reculer', 'KeyS'],
   ['left', 'Aller à gauche', 'KeyA'],
@@ -16,24 +21,28 @@ export const ACTIONS = [
   ['reload', 'Recharger', 'KeyR'],
   ['inspect', "Inspecter l'arme", 'KeyY'],
   ['weapon1', 'Arme principale', 'Digit1'],
-  ['weapon2', 'Couteau', 'Digit2'],
+  ['weapon2', 'Arme secondaire (Glock)', 'Digit2'],
+  ['weapon3', 'Couteau', 'Digit3'],
   ['loadout', 'Choisir son loadout (prochaine apparition)', 'KeyM'],
   ['scoreboard', 'Tableau des scores', 'Tab'],
 ];
 
 import { DEFAULT_SKINS } from '/shared/skins.js';
-import { PRIMARIES, validOptic } from '/shared/constants.js';
+import { PRIMARIES, SECONDARIES, validOptic } from '/shared/constants.js';
 
-const STORAGE_KEY = 'arenastrike.settings.v2';
+const STORAGE_KEY = 'arenastrike.settings.v3';
+
+// Réticule par défaut (personnalisable dans Paramètres)
+export const DEFAULT_CROSSHAIR = { style: 'cross', color: '#ffffff', size: 9, gap: 5, thickness: 2, outline: true, dot: false, dynamic: true, opacity: 1 };
 
 export const LOADOUT_COUNT = 5;
 function defaultLoadouts() {
   return [
-    { name: 'Assaut', primary: 'ak', optic: 'iron' },
-    { name: 'Sniper', primary: 'kar98k', optic: 'scope' },
-    { name: 'Assaut point rouge', primary: 'ak', optic: 'reddot' },
-    { name: 'Tireur à la mire', primary: 'kar98k', optic: 'iron' },
-    { name: 'Polyvalent', primary: 'ak', optic: 'mid' },
+    { name: 'Assaut', primary: 'ak', optic: 'iron', secondary: 'glock' },
+    { name: 'Sniper', primary: 'kar98k', optic: 'scope', secondary: 'glock' },
+    { name: 'Assaut point rouge', primary: 'ak', optic: 'reddot', secondary: 'glock' },
+    { name: 'Tireur à la mire', primary: 'kar98k', optic: 'iron', secondary: 'glock' },
+    { name: 'Polyvalent', primary: 'ak', optic: 'mid', secondary: 'glock' },
   ];
 }
 
@@ -42,7 +51,12 @@ function defaults() {
     name: '',
     sensitivity: 1.0,
     fov: 80,
-    volume: 0.6,
+    volume: 0.7,           // volume général
+    sfxVolume: 0.8,        // bruitages
+    musicVolume: 0.35,     // musique des menus
+    graphics: 'high',      // qualité : 'low' | 'medium' | 'high'
+    killSound: 'classic',  // pack de sons de kill (d'autres viendront avec les skins)
+    crosshair: { ...DEFAULT_CROSSHAIR },
     invertY: false,
     fullscreen: true,      // plein écran en jeu (bloque Ctrl+W sur Chrome/Edge)
     skins: { ...DEFAULT_SKINS },
@@ -58,8 +72,8 @@ export const settings = load();
 function load() {
   const s = defaults();
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    Object.assign(s, saved, { keys: { ...s.keys, ...(saved.keys || {}) }, skins: { ...s.skins, ...(saved.skins || {}) } });
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || localStorage.getItem('arenastrike.settings.v2') || '{}');
+    Object.assign(s, saved, { keys: { ...s.keys, ...(saved.keys || {}) }, skins: { ...s.skins, ...(saved.skins || {}) }, crosshair: { ...s.crosshair, ...(saved.crosshair || {}) } });
   } catch { /* stockage indisponible : on garde les valeurs par défaut */ }
   // Vérifie les loadouts (au cas où le fichier sauvegardé est ancien ou abîmé)
   const def = defaultLoadouts();
@@ -67,6 +81,7 @@ function load() {
     const l = { ...def[i], ...(s.loadouts?.[i] || {}) };
     if (!PRIMARIES.includes(l.primary)) l.primary = def[i].primary;
     l.optic = validOptic(l.primary, l.optic);
+    if (!SECONDARIES.includes(l.secondary)) l.secondary = 'glock';
     l.name = String(l.name || def[i].name).slice(0, 24);
     return l;
   });
@@ -105,6 +120,8 @@ navigator.keyboard?.getLayoutMap?.().then(m => {
 }).catch(() => {});
 
 const NAMES = {
+  Mouse0: 'Clic gauche', Mouse1: 'Clic molette', Mouse2: 'Clic droit', Mouse3: 'Souris 4', Mouse4: 'Souris 5',
+  WheelUp: 'Molette ↑', WheelDown: 'Molette ↓',
   Space: 'Espace', ShiftLeft: 'Maj gauche', ShiftRight: 'Maj droite', ControlLeft: 'Ctrl gauche',
   ControlRight: 'Ctrl droite', AltLeft: 'Alt', Tab: 'Tab', Enter: 'Entrée', Backspace: 'Retour',
   ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', CapsLock: 'Verr. Maj',

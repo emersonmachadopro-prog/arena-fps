@@ -4,7 +4,7 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted } from '../shared/constants.js';
 import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
@@ -52,7 +52,8 @@ export class Room {
       x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false,
       hp: PLAYER.MAX_HP, alive: false,
       skins: sanitizeSkins(skins),
-      primary: lo.primary, optic: lo.optic, // loadout utilisé cette manche
+      primary: lo.primary, optic: lo.optic, secondary: lo.secondary, // loadout utilisé cette manche
+      ammo: {}, ping: 0,
       nextLoadout: null,                    // loadout choisi pour la prochaine apparition
       weapon: 'ak', mag: 0, reserve: 0, reloadEnd: 0, lastShot: 0,
       kills: 0, deaths: 0, lastMove: Date.now(),
@@ -183,7 +184,7 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     const lo = sanitizeLoadout(data);
-    if (this.state !== 'playing') { p.primary = lo.primary; p.optic = lo.optic; p.nextLoadout = null; this.sendLobby(); return; }
+    if (this.state !== 'playing') { p.primary = lo.primary; p.optic = lo.optic; p.secondary = lo.secondary; p.nextLoadout = null; this.sendLobby(); return; }
     if (this.phase === 'freeze' && p.alive) {
       this.equip(p, lo);
       this.io.to(id).emit('loadout', { ...lo, applied: true });
@@ -197,11 +198,15 @@ export class Room {
   equip(p, lo) {
     p.primary = lo.primary;
     p.optic = lo.optic;
+    p.secondary = lo.secondary || 'glock';
     p.nextLoadout = null;
     p.weapon = lo.primary;
-    p.mag = WEAPONS[lo.primary].magSize;
-    p.reserve = WEAPONS[lo.primary].reserve;
-    p.reloadEnd = 0;
+    // Munitions de chaque arme (mag/reserve = celles de l'arme en main)
+    p.ammo = {};
+    for (const w of [p.primary, p.secondary]) p.ammo[w] = { mag: WEAPONS[w].magSize, reserve: WEAPONS[w].reserve };
+    p.mag = p.ammo[p.primary].mag;
+    p.reserve = p.ammo[p.primary].reserve;
+    p.reloadEnd = 0; p.reload = null;
   }
 
   sendLobby() {
@@ -212,7 +217,7 @@ export class Room {
       state: this.state,
       players: [...this.players.values()].map(p => ({
         id: p.id, name: p.name, team: p.team, ready: p.ready, skins: p.skins,
-        primary: p.primary, optic: p.optic, isBot: !!p.isBot, level: p.level || null,
+        primary: p.primary, optic: p.optic, secondary: p.secondary, isBot: !!p.isBot, level: p.level || null,
       })),
     });
   }
@@ -242,9 +247,9 @@ export class Room {
       });
       p.vel = { x: 0, y: 0, z: 0 };
       p.brain?.reset();
-      this.equip(p, p.nextLoadout || { primary: p.primary, optic: p.optic });
+      this.equip(p, p.nextLoadout || { primary: p.primary, optic: p.optic, secondary: p.secondary });
       // On force la position côté client (téléportation au spawn)
-      if (!p.isBot) this.io.to(p.id).emit('spawn', { x: s.x, y: 0, z: s.z, yaw: s.yaw, primary: p.primary, optic: p.optic });
+      if (!p.isBot) this.io.to(p.id).emit('spawn', { x: s.x, y: 0, z: s.z, yaw: s.yaw, primary: p.primary, optic: p.optic, secondary: p.secondary });
     }
     this.setPhase('freeze', MATCH.FREEZE_TIME);
   }
@@ -338,17 +343,21 @@ export class Room {
 
   onSwitch(id, weapon) {
     const p = this.players.get(id);
-    if (!p || (weapon !== p.primary && weapon !== 'knife')) return;
+    if (!p || (weapon !== p.primary && weapon !== p.secondary && weapon !== 'knife')) return;
+    if (weapon === p.weapon) return;
+    // On range les munitions de l'arme qu'on lâche et on prend celles de la nouvelle
+    if (p.reloadEnd) this.cancelReload(p);
+    if (p.ammo[p.weapon]) p.ammo[p.weapon] = { mag: p.mag, reserve: p.reserve };
     p.weapon = weapon;
-    this.cancelReload(p); // changer d'arme annule le rechargement (les balles déjà mises restent)
+    if (p.ammo[weapon]) { p.mag = p.ammo[weapon].mag; p.reserve = p.ammo[weapon].reserve; }
   }
 
   onReload(id) {
     const p = this.players.get(id);
-    if (!p || !p.alive || p.weapon !== p.primary) return;
-    const w = WEAPONS[p.primary];
+    if (!p || !p.alive || !p.ammo[p.weapon]) return;
+    const w = WEAPONS[p.weapon];
     if (p.reloadEnd || p.mag >= w.magSize || p.reserve <= 0) return;
-    const plan = reloadPlan(p.primary, p.mag, p.reserve);
+    const plan = reloadPlan(p.weapon, p.mag, p.reserve);
     const now = Date.now();
     p.reload = { start: now, rounds: plan.rounds };
     p.reloadEnd = now + plan.time * 1000;
@@ -357,7 +366,7 @@ export class Room {
   /** Interrompt un rechargement (Kar98k : on garde les balles déjà poussées) */
   cancelReload(p) {
     if (!p.reloadEnd) return;
-    const n = roundsInserted(p.primary, (Date.now() - p.reload.start) / 1000, p.reload.rounds);
+    const n = roundsInserted(p.weapon, (Date.now() - p.reload.start) / 1000, p.reload.rounds);
     p.mag += n; p.reserve -= n;
     p.reloadEnd = 0; p.reload = null;
     p.reloadLock = Date.now() + 250; // le temps de refermer la culasse
@@ -473,7 +482,7 @@ export class Room {
     // Rechargements terminés
     for (const p of this.players.values()) {
       if (p.reloadEnd && now >= p.reloadEnd) {
-        const take = Math.min(p.reload?.rounds ?? WEAPONS[p.primary].magSize - p.mag, p.reserve);
+        const take = Math.min(p.reload?.rounds ?? WEAPONS[p.weapon].magSize - p.mag, p.reserve);
         p.mag += take; p.reserve -= take; p.reloadEnd = 0; p.reload = null;
       }
     }
@@ -506,7 +515,7 @@ export class Room {
         x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3),
         yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
         crouch: p.crouch, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
-        mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd,
+        mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd, secondary: p.secondary, ping: p.isBot ? -1 : p.ping,
         kills: p.kills, deaths: p.deaths,
       })),
     });
@@ -521,5 +530,6 @@ export class Room {
 /** Vérifie un loadout reçu : { primary, optic } (accepte aussi juste le nom de l'arme) */
 function sanitizeLoadout(data) {
   const primary = PRIMARIES.includes(data?.primary) ? data.primary : PRIMARIES.includes(data) ? data : 'ak';
-  return { primary, optic: validOptic(primary, data?.optic) };
+  const secondary = SECONDARIES.includes(data?.secondary) ? data.secondary : 'glock';
+  return { primary, optic: validOptic(primary, data?.optic), secondary };
 }

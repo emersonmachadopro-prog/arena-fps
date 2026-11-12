@@ -283,7 +283,7 @@ export class Avatar {
       this.target.pitch = s.pitch;
       this.crouch = s.crouch;
     } else if (!this.dead) {
-      const t = this.target, k = Math.min(1, dt * 12);
+      const t = this.target, k = this.exact ? 1 : Math.min(1, dt * 12); // exact = corps du joueur local
       g.position.x += (t.x - g.position.x) * k;
       g.position.y += (t.y - g.position.y) * k;
       g.position.z += (t.z - g.position.z) * k;
@@ -404,6 +404,14 @@ function buildThirdPersonWeapon(id, skin, optic) {
       rbox(0.06, 0.12, 0.25, accent, 0, -0.06, 0.02, 0.02),
     );
     muzzle.position.set(0, 0.02, -1.2);
+  } else if (id === 'glock') {
+    const grip = rbox(0.035, 0.11, 0.05, body, 0, -0.1, -0.3, 0.01); grip.rotation.x = -0.25;
+    g.add(
+      rbox(0.04, 0.045, 0.2, mat(0x23262b, { metalness: 0.6, roughness: 0.4 }), 0, -0.02, -0.38, 0.008),
+      rbox(0.036, 0.03, 0.17, body, 0, -0.055, -0.37, 0.008),
+      grip,
+    );
+    muzzle.position.set(0, -0.02, -0.5);
   } else {
     const mag = rbox(0.05, 0.16, 0.07, dark, 0, -0.1, -0.5, 0.012); mag.rotation.x = 0.35;
     g.add(

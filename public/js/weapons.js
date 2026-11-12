@@ -21,11 +21,13 @@ import { fabricTex } from './textures.js';
 const POSES = {
   ak:     { hip: [0.17, -0.17, -0.62], adsZ: { iron: -0.52, reddot: -0.44, mid: -0.38 } },
   kar98k: { hip: [0.19, -0.2, -0.7],   adsZ: { iron: -0.68, reddot: -0.56, mid: -0.5, scope: -0.3 } },
+  glock:  { hip: [0.13, -0.15, -0.42], adsZ: { iron: -0.36 } },
 };
-const INSPECT_TIME = { ak: 3.0, kar98k: 3.6, knife: 2.8 };
+const INSPECT_TIME = { ak: 3.0, kar98k: 3.6, glock: 2.6, knife: 2.8 };
 
 const ease = (t) => t * t * (3 - 2 * t);
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
+const UP = new THREE.Vector3(0, 1, 0);
 
 /**
  * Animation par "images clés" : keys = [[t, {valeurs}], ...] (t de 0 à 1).
@@ -161,7 +163,72 @@ const ANIMS = {
     events: [[0.02, 'cloth'], [0.28, 'boltUp'], [0.38, 'boltBack'], [0.62, 'boltForward'], [0.72, 'boltDown']],
   },
 };
-const DRAW_TIME = { knifeDraw: 0.75, akRack: 1.0, karRack: 1.0 };
+// ---- Glock 18 ----
+const GTILT = { rz: 0.35, rx: 0.12, py: -0.02, px: -0.02 };
+Object.assign(ANIMS, {
+  glockTactical: {
+    keys: [
+      [0, {}],
+      [0.15, { ...GTILT, magY: -0.02 }],
+      [0.3, { ...GTILT, magY: -0.35, magR: 0.3, hy: -0.35, hx: -0.04 }],          // le chargeur tombe, la main gauche va en chercher un
+      [0.5, { ...GTILT, magY: -0.35, magR: 0.3, hy: -0.35, hx: -0.04 }],
+      [0.68, { ...GTILT, magY: -0.03, hy: -0.06, hx: -0.01 }],                    // nouveau chargeur
+      [0.74, { rz: 0.28, rx: 0.08, py: -0.015 }],                                 // clac
+      [1, {}],
+    ],
+    events: [[0.18, 'pistolMagOut'], [0.7, 'pistolMagIn']],
+  },
+  glockEmpty: {
+    keys: [
+      [0, {}],
+      [0.12, { ...GTILT, magY: -0.02, sl: 1 }],
+      [0.25, { ...GTILT, magY: -0.35, magR: 0.3, hy: -0.35, hx: -0.04, sl: 1 }],
+      [0.42, { ...GTILT, magY: -0.35, magR: 0.3, hy: -0.35, hx: -0.04, sl: 1 }],
+      [0.58, { ...GTILT, magY: -0.03, hy: -0.06, hx: -0.01, sl: 1 }],
+      [0.64, { rz: 0.25, rx: 0.06, py: -0.015, sl: 1 }],
+      [0.74, { rz: 0.1, ry: -0.25, py: -0.01, hx: 0.02, hy: 0.06, hz: 0.04, sl: 1 }], // la main gauche attrape la culasse
+      [0.8, { rz: 0.1, ry: -0.25, py: -0.01, hx: 0.02, hy: 0.06, hz: 0.1, sl: 1.15 }], // tire...
+      [0.84, { rz: 0.08, ry: -0.2, rx: 0.08, hx: 0.02, hy: 0.06, hz: 0.06 }],          // ...et lâche
+      [1, {}],
+    ],
+    events: [[0.15, 'pistolMagOut'], [0.6, 'pistolMagIn'], [0.82, 'pistolSlide']],
+  },
+  glockInspect: {
+    keys: [
+      [0, {}],
+      [0.18, { px: -0.06, py: 0.05, pz: 0.08, ry: 0.9, rz: -0.2 }],
+      [0.4, { px: -0.06, py: 0.05, pz: 0.08, ry: 1.0, rz: -0.15, sl: 0.35 }],       // vérif de la chambre
+      [0.55, { px: -0.06, py: 0.05, pz: 0.08, ry: 0.95, rz: -0.15 }],
+      [0.72, { px: -0.05, py: 0.06, pz: 0.08, ry: -0.9, rz: 0.3 }],                  // on regarde l'autre côté
+      [0.86, { px: -0.05, py: 0.06, pz: 0.08, ry: -0.95, rz: 0.3 }],
+      [1, {}],
+    ],
+    events: [[0.05, 'cloth'], [0.32, 'pistolSlide'], [0.62, 'cloth']],
+  },
+  glockDraw: {
+    keys: [[0, { py: -0.18, rx: -0.6, rz: 0.4 }], [0.6, { rz: -0.05 }], [1, {}]],
+    events: [[0.02, 'cloth']],
+  },
+  // Réarmement du Kar98k après un tir : la main droite lâche la poignée,
+  // lève le levier, tire la culasse (la douille sort), repousse et rabaisse.
+  karCycle: {
+    keys: [
+      [0, {}],
+      [0.14, { rhw: 1, rz: -0.05 }],                          // la main droite va sur la boule du levier
+      [0.26, { rhw: 1, bolt: 0.5, rz: -0.1 }],                // lève
+      [0.4, { rhw: 1, bolt: 1, rz: -0.12, pz: 0.012 }],       // tire en arrière (la douille sort)
+      [0.54, { rhw: 1, bolt: 0.5, rz: -0.1 }],                // repousse
+      [0.64, { rhw: 1, bolt: 0, rz: -0.05 }],                 // rabaisse
+      [0.82, {}],                                              // retour sur la poignée
+    ],
+    events: [[0.22, 'boltUp'], [0.5, 'boltForward']],
+  },
+});
+
+const DRAW_TIME = { knifeDraw: 0.75, akRack: 1.0, karRack: 1.0, glockDraw: 0.45 };
+// La main droite manœuvre aussi la culasse pendant l'armement du Kar
+ANIMS.karRack.keys = ANIMS.karCycle.keys.map(([t, k]) => [t, { ...k, rz: (k.rz || 0) - 0.08 }]);
+ANIMS.karRack.keys[0] = [0, { py: -0.15, rx: -0.4 }];
 
 export class WeaponSystem {
   constructor(vmScene, vmCamera, camera, effects) {
@@ -173,8 +240,9 @@ export class WeaponSystem {
     vmCamera.add(this.root);
     this.models = {};
     this.primary = 'ak';
+    this.secondary = 'glock';
     this.optic = 'iron';
-    this.spectating = false;
+    this.ammo = {};
     this.reset(settings.loadouts?.[settings.activeLoadout]);
   }
 
@@ -185,6 +253,7 @@ export class WeaponSystem {
     this.models = {
       ak: buildAK(sk('ak'), this.primary === 'ak' ? this.optic : 'iron', skins),
       kar98k: buildKar(sk('kar98k'), this.primary === 'kar98k' ? this.optic : 'iron', skins),
+      glock: buildGlock(sk('glock'), skins),
       knife: buildKnife(sk('knife'), skins?.knife, skins),
     };
     for (const m of Object.values(this.models)) this.root.add(m);
@@ -200,11 +269,15 @@ export class WeaponSystem {
     if (loadout) {
       this.primary = WEAPONS[loadout.primary] ? loadout.primary : 'ak';
       this.optic = validOptic(this.primary, loadout.optic);
+      this.secondary = WEAPONS[loadout.secondary] ? loadout.secondary : 'glock';
     }
     this.current = this.primary;
-    const w = WEAPONS[this.primary];
-    this.mag = w.magSize;
-    this.reserve = w.reserve;
+    // Munitions de chaque arme
+    this.ammo = {};
+    for (const id of [this.primary, this.secondary]) this.ammo[id] = { mag: WEAPONS[id].magSize, reserve: WEAPONS[id].reserve };
+    this.spent = false;       // une douille vide attend d'être éjectée (Kar98k)
+    this.slideBack = 0;       // recul de la culasse du Glock
+    this.cycle = null;        // réarmement du Kar98k { t, fired, ejected }
     this.reload = null;     // rechargement en cours { t, total, plan, anim, fired }
     this.cooldown = 0;
     this.shotsInRow = 0;
@@ -228,11 +301,16 @@ export class WeaponSystem {
   }
 
   get isGun() { return this.current !== 'knife'; }
+  // Munitions de l'arme en main
+  get mag() { return this.ammo[this.current]?.mag ?? 0; }
+  set mag(v) { if (this.ammo[this.current]) this.ammo[this.current].mag = v; }
+  get reserve() { return this.ammo[this.current]?.reserve ?? 0; }
+  set reserve(v) { if (this.ammo[this.current]) this.ammo[this.current].reserve = v; }
   get weapon() { return WEAPONS[this.current]; }
   get reloading() { return !!this.reload; }
   get scoped() { return !!this.overlay; }
   get currentOptic() { return this.isGun ? (this.current === this.primary ? this.optic : 'iron') : null; }
-  get busy() { return !!this.draw && this.draw.name !== 'knifeDraw' ? true : false; }
+  get busy() { return (!!this.draw && this.draw.name !== 'knifeDraw') || !!this.cycle; }
 
   showModel() {
     if (!this.current || !this.models[this.current]) return;
@@ -252,9 +330,10 @@ export class WeaponSystem {
     this.cooldown = w === 'knife' ? 0.45 : 0.35;
     this.ads = 0;
     this.overlay = null;
-    this.draw = { name: w === 'knife' ? 'knifeDraw' : 'switch', t: 0, fired: 0 };
+    this.cycle = null;
+    this.draw = { name: w === 'knife' ? 'knifeDraw' : w === 'glock' ? 'glockDraw' : 'switch', t: 0, fired: 0 };
     this.showModel();
-    if (w !== 'knife') sfx.switchWeapon();
+    if (w === 'ak' || w === 'kar98k') sfx.switchWeapon();
     session.switchWeapon(w);
   }
 
@@ -262,7 +341,7 @@ export class WeaponSystem {
     const w = WEAPONS[this.current];
     if (!this.isGun || this.reload || this.mag >= w.magSize || this.reserve <= 0) return;
     const plan = reloadPlan(this.current, this.mag, this.reserve);
-    const anim = this.current === 'kar98k' ? 'kar' : plan.empty ? 'akEmpty' : 'akTactical';
+    const anim = this.current === 'kar98k' ? 'kar' : this.current === 'glock' ? (plan.empty ? 'glockEmpty' : 'glockTactical') : plan.empty ? 'akEmpty' : 'akTactical';
     this.reload = { t: 0, total: plan.time, plan, anim, fired: 0, roundsDone: 0 };
     this.inspect = null;
     session.reload();
@@ -311,9 +390,23 @@ export class WeaponSystem {
 
     // --- Changement d'arme : touches 1 / 2 ou molette ---
     if (input.was('weapon1')) this.switchTo(this.primary, session);
-    if (input.was('weapon2')) this.switchTo('knife', session);
+    if (input.was('weapon2')) this.switchTo(this.secondary, session);
+    if (input.was('weapon3')) this.switchTo('knife', session);
     const wheel = input.consumeWheel();
-    if (wheel !== 0) this.switchTo(this.current === 'knife' ? this.primary : 'knife', session);
+    if (wheel !== 0) {
+      const order = [this.primary, this.secondary, 'knife'];
+      const i = order.indexOf(this.current);
+      this.switchTo(order[(i + (wheel > 0 ? 1 : 2)) % 3], session);
+    }
+
+    // --- Réarmement du Kar98k (main droite sur le levier) ---
+    if (this.cycle) {
+      const c = this.cycle;
+      c.t += dt / WEAPONS.kar98k.fireInterval;
+      this.fireEvents(c, ANIMS.karCycle.events, c.t);
+      if (!c.ejected && c.t >= 0.4) { c.ejected = true; this.ejectShell('kar98k', player); }
+      if (c.t >= 1 || this.current !== 'kar98k') this.cycle = null;
+    }
 
     // --- Animation de sortie / armement ---
     if (this.draw) {
@@ -344,10 +437,10 @@ export class WeaponSystem {
     if (input.was('inspect') && !this.inspect && !this.reload && !this.draw) { this.inspect = { t: 0, fired: 0 }; }
     if (this.inspect) {
       this.inspect.t += dt / INSPECT_TIME[this.current];
-      const anim = ANIMS[this.current === 'ak' ? 'akInspect' : this.current === 'kar98k' ? 'karInspect' : 'knifeInspect'];
+      const anim = ANIMS[{ ak: 'akInspect', kar98k: 'karInspect', glock: 'glockInspect' }[this.current] || 'knifeInspect'];
       this.fireEvents(this.inspect, anim.events, this.inspect.t);
-      // Annulée si on tire, vise, court ou recharge
-      if (this.inspect.t >= 1 || input.mouseDown || input.mouseRight || player.sprinting || this.reload) this.inspect = null;
+      // Annulée si on tire, vise ou recharge (on peut inspecter en courant)
+      if (this.inspect.t >= 1 || input.mouseDown || input.mouseRight || this.reload) this.inspect = null;
     }
 
     // --- Visée (clic droit) ---
@@ -402,11 +495,30 @@ export class WeaponSystem {
   /** Sons du rechargement balle par balle */
   karReloadSounds(r) {
     const w = WEAPONS.kar98k;
-    const ev = [[0.05, 'boltUp'], [0.22, 'boltBack']];
+    if (this.spent && r.t > 0.32) { this.spent = false; this.ejectShell('kar98k', this._player); }
+    const ev = [[0.15, 'boltUp'], [0.3, 'boltBack']];
     for (let i = 0; i < r.plan.rounds; i++) ev.push([w.reloadOpen + i * w.reloadPerRound + w.reloadPerRound * 0.55, 'roundIn']);
     const close = w.reloadOpen + r.plan.rounds * w.reloadPerRound;
     ev.push([close + 0.05, 'boltForward'], [close + 0.25, 'boltDown']);
     this.fireEvents(r, ev, r.t);
+  }
+
+  /** Douille éjectée par la fenêtre d'éjection de l'arme (côté droit) */
+  ejectShell(type, player) {
+    const m = this.models[type];
+    if (!m || !player) return;
+    const port = m.userData.ejectPort;
+    const p = new THREE.Vector3();
+    (port || m).getWorldPosition(p);           // position dans l'espace de la caméra de l'arme
+    this.camera.updateMatrixWorld();
+    p.applyMatrix4(this.camera.matrixWorld);  // → position dans le monde
+    const q = this.camera.quaternion;
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+    const back = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+    const v = right.multiplyScalar(1.6 + Math.random() * 0.8).add(up.multiplyScalar(1.4 + Math.random() * 0.6)).add(back.multiplyScalar(0.4));
+    v.x += player.vel?.x || 0; v.z += player.vel?.z || 0;
+    this.effects.shell(type, p, v, player.pos?.y ?? 0);
   }
 
   fireGun(player, session) {
@@ -445,8 +557,18 @@ export class WeaponSystem {
       flash.visible = true; flash.rotation.z = Math.random() * Math.PI;
       setTimeout(() => { flash.visible = false; }, 40);
     }
-    if (this.current === 'kar98k') { sfx.sniper(); this.boltAnim = w.fireInterval; setTimeout(() => sfx.bolt(), 420); }
-    else sfx.shot();
+    if (this.current === 'kar98k') {
+      sfx.sniper();
+      this.spent = true;
+      if (this.mag > 0) { this.cycle = { t: -0.12, fired: 0, ejected: false }; this.spent = false; } // la douille sort pendant le réarmement
+    } else if (this.current === 'glock') {
+      sfx.pistol();
+      this.slideBack = 1;
+      this.ejectShell('glock', player);
+    } else {
+      sfx.shot();
+      this.ejectShell('ak', player);
+    }
     if (this.mag === 0) setTimeout(() => { if (this.mag === 0) this.startReload(session); }, this.current === 'kar98k' ? 1100 : 120);
   }
 
@@ -474,14 +596,17 @@ export class WeaponSystem {
     const close = w.reloadOpen + n * w.reloadPerRound;
     const k = { ...TILT, rz: -0.34, rx: 0.14 };
     // ouverture puis fermeture de la culasse
-    k.bolt = t < close ? clamp01(t / 0.35) : 1 - clamp01((t - close) / 0.3);
+    k.bolt = t < close ? clamp01((t - 0.12) / 0.3) : 1 - clamp01((t - close) / 0.3);
+    // la main droite reste sur le levier pendant tout le rechargement
+    k.rhw = clamp01(t / 0.12) * (1 - clamp01((t - close - 0.32) / 0.18));
     // la main gauche va au-dessus de l'arme et pousse chaque balle
     const handIn = clamp01((t - 0.2) / 0.2) * (1 - clamp01((t - close) / 0.25));
     let dip = 0;
     if (t > w.reloadOpen && t < close) {
       const phase = ((t - w.reloadOpen) % w.reloadPerRound) / w.reloadPerRound;
       dip = Math.sin(phase * Math.PI);
-    }
+      k.cart = phase < 0.55 ? 1 : 0; // la balle est visible dans la main jusqu'à ce qu'elle entre
+    } else if (t > 0.25 && t <= w.reloadOpen) k.cart = 1;
     k.hx = 0.02 * handIn; k.hy = (0.13 - dip * 0.06) * handIn; k.hz = 0.33 * handIn;
     // retour en douceur à la fin
     const out = clamp01((t - (r.total - 0.25)) / 0.25);
@@ -499,7 +624,9 @@ export class WeaponSystem {
     const sp = player.sprinting && !this.reload ? 1 : 0;
     this.sprintAnim += (sp - this.sprintAnim) * Math.min(1, dt * 9);
     this.slideAnim += ((player.sliding ? 1 : 0) - this.slideAnim) * Math.min(1, dt * 10);
-    const sa = this.sprintAnim, sl = this.slideAnim;
+    const sa = this.sprintAnim * (this.inspect ? 0.3 : 1), sl = this.slideAnim; // on peut inspecter en courant
+    this._player = player;
+    this.slideBack = Math.max(0, this.slideBack - dt * 14);
 
     // Inertie : ressort amorti qui ramène l'arme au centre
     const sw = this.sway;
@@ -530,9 +657,9 @@ export class WeaponSystem {
       if (this.draw && ANIMS[this.draw.name]) k = track(clamp01(this.draw.t), ANIMS[this.draw.name].keys);
       else if (this.draw) drawLower = 1 - ease(clamp01(this.draw.t)); // simple changement d'arme
       else if (this.reload) k = this.reload.anim === 'kar' ? this.karReloadPose(this.reload) : track(this.reload.t / this.reload.total, ANIMS[this.reload.anim].keys);
-      else if (this.inspect) k = track(this.inspect.t, this.current === 'ak' ? ANIMS.akInspect.keys : ANIMS.karInspect.keys);
-      // Réarmement du Kar98k après un tir (hors visée)
-      const bolt = this.current === 'kar98k' && this.boltAnim > 0 ? Math.sin((1 - this.boltAnim / w.fireInterval) * Math.PI) : 0;
+      else if (this.cycle) k = track(clamp01(this.cycle.t), ANIMS.karCycle.keys);
+      else if (this.inspect) k = track(this.inspect.t, ANIMS[{ ak: 'akInspect', kar98k: 'karInspect', glock: 'glockInspect' }[this.current]].keys);
+      const bolt = 0;
 
       const adsY = -ud.sightY, adsZ = pose.adsZ[this.currentOptic] ?? pose.adsZ.iron;
       const px = pose.hip[0] * (1 - a);
@@ -556,14 +683,44 @@ export class WeaponSystem {
       }
       // Levier d'armement (AK)
       if (ud.charge) ud.charge.position.z = ud.chargeZ + (k.ch || 0) * 0.1;
-      // Main gauche
+      // Mains
       if (ud.leftHand) ud.leftHand.position.set(ud.leftHome.x + (k.hx || 0), ud.leftHome.y + (k.hy || 0), ud.leftHome.z + (k.hz || 0));
+      if (ud.rightHand) ud.rightHand.position.set(ud.rightHome.x + (k.rhx || 0), ud.rightHome.y + (k.rhy || 0), ud.rightHome.z + (k.rhz || 0));
+      if (ud.rightHand) ud.rightHand.rotation.set(0, 0, 0);
+      if (ud.cartridge) ud.cartridge.visible = !!k.cart;
+      // Culasse du Glock : recule à chaque tir, reste bloquée en arrière quand le chargeur est vide
+      if (ud.slide) {
+        this.slideLocked = this.current === 'glock' && this.mag === 0 && !this.reload;
+        const back = Math.max(this.slideBack, this.slideLocked ? 1 : 0, k.sl || 0);
+        ud.slide.position.z = ud.slideZ + back * 0.03;
+      }
       // Culasse (Kar98k) : levier relevé puis tiré en arrière
       if (ud.bolt) {
         const open = Math.max(k.bolt || 0, bolt * (1 - a));
         const up = Math.min(1, open * 2), back = Math.max(0, open * 2 - 1);
         ud.bolt.rotation.z = up * 1.35;
         ud.bolt.position.z = ud.boltZ + back * 0.09;
+        // La main droite suit la boule du levier (c'est elle qui manœuvre la culasse)
+        const hw = ease(clamp01(k.rhw || 0));
+        if (ud.rightHand && hw > 0) {
+          const ang = up * 1.35, kx = 0.065, ky = -0.012;
+          const knob = new THREE.Vector3(
+            ud.bolt.position.x + kx * Math.cos(ang) - ky * Math.sin(ang),
+            ud.bolt.position.y + kx * Math.sin(ang) + ky * Math.cos(ang),
+            ud.bolt.position.z);
+          const target = knob.add(ud.knobGrip); // la main pince la boule
+          ud.rightHand.position.lerpVectors(ud.rightHome, target, hw);
+          ud.rightHand.rotation.set(-0.5 * hw, 0.25 * hw, 0.5 * hw + ang * 0.35 * hw);
+        }
+      }
+      // L'avant-bras droit suit le poignet
+      if (ud.rightArm) {
+        const A = ud.rightArm;
+        const w = A.wristLocal.clone().applyEuler(ud.rightHand.rotation).add(ud.rightHand.position);
+        const d = A.elbow.clone().sub(w);
+        A.mesh.position.copy(w).add(A.elbow).multiplyScalar(0.5);
+        A.mesh.quaternion.setFromUnitVectors(UP, d.normalize());
+        A.mesh.scale.set(1, w.distanceTo(A.elbow) / A.len0, 1);
       }
     } else {
       // Couteau : coup, lancé à la sortie (D1), papillon à l'inspection (C4)
@@ -588,14 +745,14 @@ export class WeaponSystem {
     const key = `${info.primary}:${info.optic}:${JSON.stringify(info.skins || {})}`;
     if (key !== this.specKey) {
       this.specKey = key;
-      this.primary = info.primary; this.optic = validOptic(info.primary, info.optic);
+      this.primary = info.primary; this.optic = validOptic(info.primary, info.optic); this.secondary = info.secondary || 'glock';
       this.rebuild(info.skins || {});
     }
-    if (info.weapon !== this.current) { this.current = info.weapon; this.showModel(); this.draw = { name: info.weapon === 'knife' ? 'knifeDraw' : 'switch', t: 0, fired: 0 }; }
+    if (info.weapon !== this.current) { this.current = info.weapon; this.showModel(); this.draw = { name: info.weapon === 'knife' ? 'knifeDraw' : info.weapon === 'glock' ? 'glockDraw' : 'switch', t: 0, fired: 0 }; }
     // Rechargement vu de l'extérieur : on lance l'animation quand il commence
     if (info.reloading && !this.reload && this.isGun) {
       const plan = reloadPlan(this.current, Math.max(0, info.mag), info.reserve + 1);
-      this.reload = { t: 0, total: plan.time, plan, anim: this.current === 'kar98k' ? 'kar' : plan.empty ? 'akEmpty' : 'akTactical', fired: 999 };
+      this.reload = { t: 0, total: plan.time, plan, anim: this.current === 'kar98k' ? 'kar' : this.current === 'glock' ? (plan.empty ? 'glockEmpty' : 'glockTactical') : plan.empty ? 'akEmpty' : 'akTactical', fired: 999 };
     }
     if (this.reload) { this.reload.t += dt; if (this.reload.t >= this.reload.total || !info.reloading) this.reload = null; }
     if (this.draw) { this.draw.t += dt / (DRAW_TIME[this.draw.name] || 0.35); if (this.draw.t >= 1) this.draw = null; }
@@ -627,14 +784,24 @@ function rightGripHand(g, M, pos, forearmEnd, tilt = 0.3) {
   const hand = makeHand(M.glove, { curl: [-1.25, -1.05, -0.7], indexCurl: [-0.3, -0.75, -0.5], thumbCurl: -0.55, thumbSpread: -0.4 });
   hand.scale.x = -1; // main droite = main gauche en miroir
   orientHand(hand, [0, -1, 0], [1, 0, 0], [0, 0, 1]);
+  // Groupe animable (main + avant-bras) : la main peut lâcher la poignée
+  const group = new THREE.Group();
+  group.position.set(...pos);
   const holder = new THREE.Group();
-  holder.position.set(...pos);
   holder.rotation.x = -tilt; // suit l'inclinaison de la poignée
   holder.add(hand);
-  g.add(holder);
-  const wrist = [pos[0] + 0.02, pos[1] - 0.035, pos[2] + 0.08];
-  g.add(capsule([pos[0], pos[1] - 0.012, pos[2] + 0.025], wrist, 0.033, M.glove)); // poignet (gant)
-  g.add(capsule(wrist, forearmEnd, 0.05, M.sleeve));                                // avant-bras (manche)
+  group.add(holder);
+  const rel = (p) => [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
+  const wrist = [0.02, -0.035, 0.08];
+  group.add(capsule([0, -0.012, 0.025], wrist, 0.033, M.glove));     // poignet (gant)
+  // Avant-bras : relié au coude (fixe) et au poignet (qui bouge avec la main) → il pivote naturellement
+  const fa = capsule([pos[0] + wrist[0], pos[1] + wrist[1], pos[2] + wrist[2]], forearmEnd, 0.05, M.sleeve);
+  g.add(fa);
+  g.add(group);
+  g.userData.rightHand = group;
+  g.userData.rightHome = group.position.clone();
+  const elbow = new THREE.Vector3(...forearmEnd), w0 = new THREE.Vector3(...wrist).add(group.position);
+  g.userData.rightArm = { mesh: fa, elbow, wristLocal: new THREE.Vector3(...wrist), len0: w0.distanceTo(elbow) };
 }
 
 /** Main gauche sous le garde-main (groupe animable : main + avant-bras) */
@@ -654,10 +821,31 @@ function leftSupportHand(g, M, pos, forearmEnd) {
   g.userData.leftHome = group.position.clone();
 }
 
+let flashTex = null;
+/** Texture d'éclair de bouche : étoile lumineuse avec un cœur blanc */
+function flashTexture() {
+  if (flashTex) return flashTex;
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const x = c.getContext('2d');
+  x.translate(64, 64);
+  const grad = x.createRadialGradient(0, 0, 0, 0, 0, 60);
+  grad.addColorStop(0, 'rgba(255,255,240,1)'); grad.addColorStop(0.25, 'rgba(255,214,120,0.95)');
+  grad.addColorStop(0.6, 'rgba(255,140,40,0.45)'); grad.addColorStop(1, 'rgba(255,90,0,0)');
+  x.fillStyle = grad;
+  for (let i = 0; i < 7; i++) {        // branches de l'étoile
+    x.rotate((Math.PI * 2) / 7);
+    x.beginPath(); x.moveTo(-9, 0); x.lineTo(0, -60 + (i % 2) * 18); x.lineTo(9, 0); x.closePath(); x.fill();
+  }
+  x.beginPath(); x.arc(0, 0, 22, 0, Math.PI * 2); x.fill();
+  flashTex = new THREE.CanvasTexture(c);
+  flashTex.colorSpace = THREE.SRGBColorSpace;
+  return flashTex;
+}
+
 function muzzleFlash(g, z, size = 0.22) {
   const flash = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size),
-    new THREE.MeshBasicMaterial({ color: 0xffd36b, transparent: true, opacity: 0.9, side: THREE.DoubleSide, depthWrite: false })
+    new THREE.MeshBasicMaterial({ map: flashTexture(), transparent: true, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false })
   );
   flash.position.set(0, 0.02, z);
   flash.visible = false;
@@ -774,6 +962,30 @@ function buildAK(skin, optic, skins) {
   if (optic !== 'iron') g.add(rbox(0.026, 0.01, 0.15, dark, 0, 0.055, 0.02, 0.003));
   g.userData.sightY = addOptic(g, optic, 0.06, 0.02) ?? 0.084;
 
+  // --- Détails ---
+  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
+  // Rivets du boîtier (des deux côtés)
+  for (const x of [-0.028, 0.028]) for (const [y, z] of [[-0.02, -0.15], [-0.02, -0.1], [0.015, -0.17], [-0.02, 0.14], [0.012, 0.16], [-0.025, 0.06]]) {
+    const r = new THREE.Mesh(new THREE.SphereGeometry(0.0035, 8, 6), steel); r.position.set(x, y, z); r.scale.x = 0.5; g.add(r);
+  }
+  // Sélecteur de tir (levier sur le côté droit) + fenêtre d'éjection
+  g.add(extrude([[-0.12, 0.022], [0.08, 0.026], [0.1, 0.01], [0.09, 0.004], [-0.12, 0.012]], 0.004, steel, 0.0015));
+  g.children[g.children.length - 1].position.x = 0.03;
+  g.add(rbox(0.004, 0.018, 0.09, mat(0x0e0f12, { roughness: 0.9 }), 0.0275, 0.018, -0.02, 0.001)); // fenêtre d'éjection
+  // Nervures du chargeur + bouton de chargeur
+  for (let i = 0; i < 3; i++) mag.add(rbox(0.038, 0.006, 0.05, dark, 0, -0.04 - i * 0.045, -0.006 - i * 0.008, 0.002));
+  g.add(rbox(0.03, 0.012, 0.012, steel, 0, -0.04, -0.03, 0.003)); // arrêtoir de chargeur
+  // Fentes du frein de bouche, bague de garde-main, anneaux de bretelle
+  for (let i = 0; i < 3; i++) g.add(rbox(0.04, 0.004, 0.008, mat(0x0b0c0e), 0, 0.022, -0.79 - i * 0.016, 0.001));
+  g.add(cyl(0.032, 0.012, steel, 0, -0.008, -0.2, 0.032));
+  g.add(new THREE.Mesh(new THREE.TorusGeometry(0.012, 0.0025, 6, 14), steel).translateX(-0.028).translateY(-0.03).translateZ(0.38));
+  g.children[g.children.length - 1].rotation.y = Math.PI / 2;
+  // Vis du garde-main + baïonnette (tenon)
+  g.add(cyl(0.006, 0.054, steel, 0, -0.012, -0.3).rotateY(Math.PI / 2));
+  g.add(rbox(0.012, 0.012, 0.05, steel, 0, -0.008, -0.7, 0.003));
+  // Fenêtre d'éjection (point de sortie des douilles)
+  const port = new THREE.Object3D(); port.position.set(0.035, 0.02, -0.02); g.add(port); g.userData.ejectPort = port;
+
   rightGripHand(g, M, [0.032, -0.09, 0.128], [0.17, -0.36, 0.58], 0.35);
   leftSupportHand(g, M, [0, -0.062, -0.31], [-0.26, -0.44, 0.08]);
   muzzleFlash(g, -0.85);
@@ -825,9 +1037,96 @@ function buildKar(skin, optic, skins) {
   }
   g.userData.sightY = addOptic(g, optic, 0.0275, -0.02) ?? 0.049;
 
+  // --- Détails ---
+  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
+  g.add(
+    cyl(0.017, 0.06, steel, 0, 0.012, 0.18),                         // arrière de culasse (manchon)
+    rbox(0.012, 0.016, 0.03, steel, 0, 0.028, 0.2, 0.003),            // sûreté à drapeau
+    rbox(0.004, 0.02, 0.07, mat(0x0e0f12, { roughness: 0.9 }), 0.021, 0.02, 0.02, 0.001), // fenêtre d'éjection
+    cyl(0.004, 0.32, steel, 0, -0.024, -0.82),                       // baguette de nettoyage
+    rbox(0.02, 0.008, 0.18, steel, 0, -0.06, 0.01, 0.002),            // plaque de fond de magasin
+  );
+  // Anneaux de bretelle + vis
+  for (const z of [-0.45, 0.32]) {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.011, 0.0022, 6, 14), steel);
+    ring.position.set(-0.03, -0.055, z); ring.rotation.y = Math.PI / 2; g.add(ring);
+  }
+  for (const z of [-0.03, 0.12]) g.add(cyl(0.005, 0.054, steel, 0, -0.048, z).rotateY(Math.PI / 2));
+  // Balle tenue par la main gauche pendant le rechargement (une par une)
+  const brass = mat(0xc9a04a, { metalness: 0.85, roughness: 0.3 });
+  const cart = new THREE.Group();
+  cart.add(cyl(0.0062, 0.057, brass, 0, 0, 0), cyl(0.004, 0.022, mat(0xb07a3a, { metalness: 0.7, roughness: 0.35 }), 0, 0, -0.038, 0.0018));
+  cart.rotation.y = 0.15;
+  // Fenêtre d'éjection
+  const port = new THREE.Object3D(); port.position.set(0.03, 0.022, 0.03); g.add(port); g.userData.ejectPort = port;
+
   rightGripHand(g, M, [0.032, -0.058, 0.155], [0.17, -0.36, 0.6], 0.15);
   leftSupportHand(g, M, [0, -0.075, -0.33], [-0.26, -0.45, 0.04]);
+  cart.position.set(0.012, 0.028, 0.0);
+  cart.visible = false;
+  g.userData.leftHand.add(cart);
+  g.userData.cartridge = cart;
+  g.userData.knobGrip = new THREE.Vector3(0.012, -0.022, 0.012);
   muzzleFlash(g, -1.02, 0.28);
+  return g;
+}
+
+function buildGlock(skin, skins) {
+  const g = new THREE.Group();
+  const { body: poly, dark } = skinMaterials(skin);
+  const M = armMaterials(skins);
+  const steel = mat(0x23262b, { metalness: 0.7, roughness: 0.38 });
+  const black = mat(0x0c0d10, { roughness: 0.9 });
+
+  // Culasse (animée : recule à chaque tir)
+  const slide = new THREE.Group();
+  slide.add(rbox(0.026, 0.03, 0.19, steel, 0, 0, 0, 0.004));
+  // Stries de préhension à l'arrière (des deux côtés)
+  for (const x of [-0.0132, 0.0132]) for (let i = 0; i < 7; i++) slide.add(rbox(0.002, 0.022, 0.0025, black, x, -0.001, 0.07 - i * 0.006, 0.0005));
+  // Fenêtre d'éjection + canon visible, guidon et hausse
+  slide.add(
+    rbox(0.012, 0.004, 0.04, black, 0.004, 0.0145, -0.01, 0.001),
+    rbox(0.004, 0.008, 0.006, steel, 0, 0.019, -0.088, 0.001),                 // guidon
+    rbox(0.008, 0.009, 0.008, steel, -0.0075, 0.0195, 0.085, 0.001),           // hausse (2 montants → encoche)
+    rbox(0.008, 0.009, 0.008, steel, 0.0075, 0.0195, 0.085, 0.001),
+    rbox(0.002, 0.002, 0.002, mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.6 }), 0, 0.023, -0.088, 0.0005), // point blanc
+  );
+  const bore = cyl(0.0045, 0.004, black, 0, -0.004, -0.0955); slide.add(bore);
+  slide.position.set(0, 0.012, -0.02);
+  g.add(slide);
+  g.userData.slide = slide; g.userData.slideZ = -0.02;
+  const port = new THREE.Object3D(); port.position.set(0.016, 0.016, -0.01); slide.add(port); g.userData.ejectPort = port;
+
+  // Carcasse en polymère : rail, pontet, poignée inclinée avec texture
+  g.add(extrude([
+    [-0.11, -0.003], [0.075, -0.003], [0.08, -0.012], [0.1, -0.115], [0.094, -0.125], [0.045, -0.125], [0.04, -0.112],
+    [0.03, -0.035], [0.0, -0.032], [-0.005, -0.05], [-0.038, -0.05], [-0.042, -0.024], [-0.11, -0.02],
+  ], 0.027, poly, 0.004));
+  g.add(extrude([[-0.034, -0.044], [0.0, -0.044], [0.0, -0.05], [-0.036, -0.05]], 0.022, poly, 0.002)); // bas du pontet
+  g.add(rbox(0.005, 0.02, 0.007, black, 0, -0.03, -0.012, 0.0015));       // détente (avec sécurité)
+  g.add(rbox(0.016, 0.006, 0.045, poly, 0, -0.022, -0.08, 0.002));        // rail
+  for (let i = 0; i < 3; i++) g.add(rbox(0.018, 0.004, 0.004, black, 0, -0.026, -0.065 - i * 0.012, 0.001));
+  g.add(rbox(0.006, 0.006, 0.012, black, 0.014, -0.022, 0.005, 0.0015));  // arrêtoir de culasse
+  g.add(rbox(0.01, 0.008, 0.008, black, 0.013, -0.035, 0.034, 0.002));    // bouton de chargeur
+  // Texture granuleuse de la poignée (plaquettes)
+  for (const x of [-0.0138, 0.0138]) {
+    const grip = rbox(0.002, 0.07, 0.04, dark, x, -0.07, 0.065, 0.001);
+    grip.rotation.x = -0.2; g.add(grip);
+  }
+  // Chargeur (séparé pour le rechargement) avec talon
+  const mag = new THREE.Group();
+  mag.add(rbox(0.02, 0.1, 0.03, black, 0, -0.05, 0, 0.003), rbox(0.026, 0.012, 0.04, poly, 0, -0.104, 0.002, 0.003));
+  mag.rotation.x = -0.2;
+  mag.position.set(0, -0.02, 0.058);
+  g.add(mag);
+  g.userData.mag = mag; g.userData.magHome = mag.position.clone();
+
+  g.userData.sightY = 0.034;
+  // Prise à deux mains : la main droite sur la poignée, la gauche par-dessus
+  rightGripHand(g, M, [0.018, -0.062, 0.07], [0.14, -0.3, 0.42], 0.2);
+  leftSupportHand(g, M, [-0.016, -0.085, 0.045], [-0.2, -0.34, 0.36]);
+  g.userData.leftHand.rotation.set(0.15, -0.7, 0.9);
+  muzzleFlash(g, -0.13, 0.14);
   return g;
 }
 

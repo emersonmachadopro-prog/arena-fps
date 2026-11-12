@@ -103,35 +103,62 @@ export function capsule(a, b, radius, material) {
 }
 
 /**
- * Main avec 4 doigts à 3 phalanges + pouce à 2 phalanges.
+ * Main détaillée (style cubique arrondi) : gant tactique sans doigts,
+ * protections sur les jointures, sangle au poignet, bouts de doigts nus
+ * avec ongles. 4 doigts à 3 phalanges + pouce à 2 phalanges.
+ *
  * Repère de la main : paume vers -y, doigts vers -z, doigts répartis sur l'axe x
  * (index en x positif, côté pouce). C'est une main GAUCHE : pour une main droite,
  * mettre scale.x = -1.
  * curl = pliage des doigts [phalange 1, 2, 3] en radians (négatif = vers la paume).
  * indexCurl = pliage spécial de l'index (pour le poser sur la détente).
  */
+const handMats = new Map();
+function handMaterials(glove) {
+  const key = glove.uuid;
+  if (!handMats.has(key)) {
+    handMats.set(key, {
+      skin: new THREE.MeshStandardMaterial({ color: 0xc99a72, roughness: 0.6 }),
+      nail: new THREE.MeshStandardMaterial({ color: 0xe8c4b0, roughness: 0.35 }),
+      plate: new THREE.MeshStandardMaterial({ color: new THREE.Color(glove.color).multiplyScalar(0.55), roughness: 0.55, metalness: 0.1 }),
+      strap: new THREE.MeshStandardMaterial({ color: 0x1c1b19, roughness: 0.9 }),
+    });
+  }
+  return handMats.get(key);
+}
+
 export function makeHand(material, { curl = [-0.9, -1.1, -0.8], indexCurl = null, thumbCurl = -0.5, thumbSpread = -0.7 } = {}) {
   const c3 = (c) => (c.length >= 3 ? c : [c[0], c[1], c[1] * 0.8]);
   curl = c3(curl); if (indexCurl) indexCurl = c3(indexCurl);
+  const M = handMaterials(material);
   const hand = new THREE.Group();
-  hand.add(rbox(0.078, 0.026, 0.082, material, 0, 0, 0, 0.011));                 // paume
-  hand.add(rbox(0.07, 0.022, 0.02, material, 0, -0.002, -0.036, 0.009));         // jointures
-  // [position x, longueurs des 3 phalanges, rayon] : index, majeur, annulaire, auriculaire
+  hand.add(
+    rbox(0.078, 0.026, 0.082, material, 0, 0, 0, 0.011),              // paume
+    rbox(0.06, 0.008, 0.05, M.plate, 0, 0.015, 0.004, 0.004),         // renfort sur le dos de la main
+    rbox(0.07, 0.022, 0.02, material, 0, -0.002, -0.036, 0.009),      // jointures
+    rbox(0.082, 0.03, 0.02, M.strap, 0, 0.002, 0.044, 0.006),         // sangle du poignet
+    rbox(0.03, 0.006, 0.014, M.plate, 0.022, 0.018, 0.044, 0.002),    // velcro
+  );
+  // [position x, longueurs des 3 phalanges, épaisseur] : index, majeur, annulaire, auriculaire
   const fingers = [
-    [0.027, [0.024, 0.016, 0.014], 0.0085],
-    [0.009, [0.026, 0.018, 0.015], 0.0088],
-    [-0.009, [0.025, 0.017, 0.014], 0.0085],
-    [-0.027, [0.02, 0.013, 0.012], 0.0076],
+    [0.027, [0.024, 0.016, 0.015], 0.017],
+    [0.009, [0.026, 0.018, 0.016], 0.0175],
+    [-0.009, [0.025, 0.017, 0.015], 0.017],
+    [-0.027, [0.02, 0.013, 0.013], 0.015],
   ];
-  fingers.forEach(([x, lens, r], i) => {
+  fingers.forEach(([x, lens, w], i) => {
     const c = i === 0 && indexCurl ? indexCurl : curl;
     let parent = new THREE.Group();
-    parent.position.set(x, 0, -0.04);
+    parent.position.set(x, 0, -0.042);
     hand.add(parent);
     lens.forEach((len, k) => {
       const seg = new THREE.Group();
       seg.rotation.x = c[k];
-      seg.add(capsule([0, 0, 0], [0, 0, -len], r * (1 - k * 0.08), material));
+      const ww = w * (1 - k * 0.07);
+      const last = k === 2;
+      seg.add(rbox(ww, ww * 0.92, len + 0.003, last ? M.skin : material, 0, 0, -len / 2, ww * 0.38)); // phalange
+      if (k === 0) seg.add(rbox(ww * 0.9, 0.005, len * 0.55, M.plate, 0, ww * 0.48, -len * 0.45, 0.002)); // protection
+      if (last) seg.add(rbox(ww * 0.6, 0.003, len * 0.5, M.nail, 0, ww * 0.46, -len * 0.6, 0.0012));      // ongle
       if (k === 0) parent.add(seg);
       else { seg.position.set(0, 0, -lens[k - 1]); parent.add(seg); }
       parent = seg;
@@ -141,11 +168,11 @@ export function makeHand(material, { curl = [-0.9, -1.1, -0.8], indexCurl = null
   const th = new THREE.Group();
   th.position.set(0.038, -0.008, 0.0);
   th.rotation.set(0, thumbSpread, 0);
-  th.add(capsule([0, 0, 0], [0, 0, -0.028], 0.0105, material));
+  th.add(rbox(0.02, 0.019, 0.03, material, 0, 0, -0.014, 0.007));
   const thTip = new THREE.Group();
   thTip.position.set(0, 0, -0.028);
   thTip.rotation.x = thumbCurl;
-  thTip.add(capsule([0, 0, 0], [0, 0, -0.024], 0.0095, material));
+  thTip.add(rbox(0.018, 0.017, 0.026, M.skin, 0, 0, -0.012, 0.006), rbox(0.011, 0.003, 0.012, M.nail, 0, 0.0085, -0.016, 0.0012));
   th.add(thTip);
   hand.add(th);
   return hand;

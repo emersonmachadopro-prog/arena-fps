@@ -24,6 +24,7 @@ export class SoloSession {
     this.ctx = ctx;
     this.botsShoot = botsShoot;
     this.kills = 0;
+    this.streak = 0;
     this.deaths = 0;
     this.respawnTimer = 0;
     this.bots = BOT_NAMES.map((name, i) => this.makeBot(name, i));
@@ -100,7 +101,8 @@ export class SoloSession {
         bot.alive = false; bot.deaths++; bot.respawn = 3;
         bot.avatar.die(); // il tombe au sol
         this.kills++;
-        sfx.kill();
+        this.streak++;
+        sfx.killStreak(this.streak, settings.killSound);
         this.ctx.hud.kill({ killer: 'Toi', killerTeam: 'A', victim: bot.name, victimTeam: 'B', weapon, headshot: hit.headshot }, true);
       }
       return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
@@ -198,6 +200,10 @@ export class SoloSession {
     const muzzle = bot.avatar.muzzleWorld(); // la traçante part du canon de son arme
     this.ctx.effects.tracer(muzzle, { x: eye.x + d.x * end, y: eye.y + d.y * end, z: eye.z + d.z * end });
     sfx.shot(muzzle);
+    if (bot.avatar.muzzleWorld) {
+      const len = Math.hypot(d.x, d.z) || 1;
+      this.ctx.effects.shell('ak', { x: muzzle.x - d.x * 0.42, y: muzzle.y + 0.03, z: muzzle.z - d.z * 0.42 }, { x: -d.z / len * 1.8, y: 1.7, z: d.x / len * 1.8 }, bot.avatar.group.position.y);
+    }
     if (!hit) return;
 
     player.hp -= hit.headshot ? 40 : 14; // les bots font moins mal que l'AK du joueur
@@ -206,7 +212,7 @@ export class SoloSession {
     this.ctx.hud.damage(-(yawTo - player.yaw));
     if (player.hp <= 0) {
       player.hp = 0; player.alive = false;
-      this.deaths++; bot.kills++;
+      this.deaths++; bot.kills++; this.streak = 0;
       this.respawnTimer = 3;
       this.ctx.weapons.setVisible(false);
       this.ctx.hud.kill({ killer: bot.name, killerTeam: 'B', victim: 'Toi', victimTeam: 'A', weapon: 'ak', headshot: hit.headshot }, true);
@@ -225,8 +231,8 @@ export class SoloSession {
 
   scoreboardPlayers() {
     return [
-      { name: 'Toi', team: 'A', kills: this.kills, deaths: this.deaths, alive: this.ctx.player.alive },
-      ...this.bots.map(b => ({ name: b.name, team: 'B', kills: b.kills, deaths: b.deaths, alive: b.alive })),
+      { name: 'Toi', team: 'A', kills: this.kills, deaths: this.deaths, alive: this.ctx.player.alive, ping: 0 },
+      ...this.bots.map(b => ({ name: b.name, team: 'B', kills: b.kills, deaths: b.deaths, alive: b.alive, ping: -1 })),
     ];
   }
 

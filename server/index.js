@@ -102,6 +102,9 @@ io.on('connection', (socket) => {
   socket.on('shoot', (data) => room?.onShoot(socket.id, data || {}));
   socket.on('reload', () => room?.onReload(socket.id));
   socket.on('reloadCancel', () => room?.onReloadCancel(socket.id));
+  // Mesure du ping : le client envoie l'heure, on la renvoie tout de suite
+  socket.on('pingCheck', (t, reply) => reply?.(t));
+  socket.on('myPing', (ms) => { const p = room?.players.get(socket.id); if (p && typeof ms === 'number') p.ping = Math.max(0, Math.min(999, Math.round(ms))); });
   socket.on('switch', (w) => room?.onSwitch(socket.id, w));
 });
 

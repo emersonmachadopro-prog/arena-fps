@@ -75,6 +75,26 @@ export const WEAPONS = {
     recoilKick: 0.06,
     adsSpeed: 13,          // mise en joue rapide
   },
+  glock: {
+    name: 'Glock 18',
+    slot: 'secondary',
+    damage: 22,
+    headDamage: 70,
+    fireInterval: 0.11,    // semi-automatique rapide
+    auto: false,
+    magSize: 17,
+    reserve: 51,
+    reloadTime: 1.5,
+    reloadEmptyTime: 1.85,
+    range: 120,
+    hipSpread: 0.022,
+    adsSpread: 0.004,
+    moveSpread: 0.02,
+    airSpread: 0.06,
+    burstSpread: 0.004,
+    recoilKick: 0.018,
+    adsSpeed: 16,
+  },
   knife: {
     name: 'Couteau',
     slot: 'melee',
@@ -85,8 +105,10 @@ export const WEAPONS = {
   },
 };
 
-// Armes principales qu'on peut choisir dans les loadouts
+// Armes qu'on peut choisir dans les loadouts
 export const PRIMARIES = ['ak', 'kar98k'];
+export const SECONDARIES = ['glock'];
+export const GUNS = [...PRIMARIES, ...SECONDARIES];
 
 // ---------------------------------------------------------------------
 //  Viseurs (accessoires). zoom = grossissement en visant.
@@ -102,6 +124,7 @@ export const OPTICS = {
 export const WEAPON_OPTICS = {
   ak: ['iron', 'reddot', 'mid'],
   kar98k: ['iron', 'reddot', 'mid', 'scope'],
+  glock: ['iron'],
 };
 export function validOptic(weapon, optic) {
   return WEAPON_OPTICS[weapon]?.includes(optic) ? optic : WEAPON_OPTICS[weapon]?.[0] || 'iron';

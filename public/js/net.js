@@ -36,8 +36,20 @@ export class NetGame {
     this.spectating = null; // id du coéquipier qu'on regarde une fois mort
     this.clockOffset = null; // horloge serveur - horloge locale (ms)
     this.specCam = null;
+    this.streak = 0;        // kills d'affilée (sons de kill)
+    this.ping = 0;
 
     const s = this.socket;
+    // Mesure du ping toutes les 2 s (aller-retour), envoyée au serveur pour le tableau des scores
+    this.pingTimer = setInterval(() => {
+      if (!s.connected) return;
+      const t0 = performance.now();
+      s.emit('pingCheck', t0, () => {
+        const rtt = performance.now() - t0;
+        this.ping = this.ping ? Math.round(this.ping * 0.6 + rtt * 0.4) : Math.round(rtt);
+        s.emit('myPing', this.ping);
+      });
+    }, 2000);
     s.on('connect_error', () => ui.onError('Impossible de joindre le serveur.'));
     s.on('disconnect', () => { if (this.lobby) ui.onError('Déconnecté du serveur.'); });
     s.on('lobby', (l) => { this.lobby = l; ui.onLobby(l); });
@@ -75,7 +87,7 @@ export class NetGame {
   setReady(r) { this.socket.emit('setReady', r); }
   playAgain() { this.socket.emit('playAgain'); }
   leave() { this.socket.emit('leaveRoom'); this.lobby = null; this.inMatch = false; this.clearAvatars(); }
-  destroy() { this.leave(); this.socket.disconnect(); }
+  destroy() { this.leave(); clearInterval(this.pingTimer); this.socket.disconnect(); }
 
   // ---------------- Partie ----------------
   onMatchStart() {
@@ -88,10 +100,11 @@ export class NetGame {
   onSpawn(sp) {
     const { player, weapons } = this.ctx;
     player.spawn(sp);
-    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic }, { rack: true }); // animation d'armement (D2)
+    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic, secondary: sp.secondary || 'glock' }, { rack: true }); // animation d'armement (D2)
     weapons.setVisible(true);
     this.spectating = null;
     this.specCam = null;
+    this.streak = 0;
   }
 
   onState(st) {
@@ -146,6 +159,7 @@ export class NetGame {
 
   onLocalDeath() {
     this.ctx.weapons.setVisible(false);
+    this.streak = 0;
     this.ctx.hud.message('Éliminé', 'Tu regardes un coéquipier jusqu\'à la fin de la manche', 2500, '#ff4d6d');
   }
 
@@ -160,15 +174,30 @@ export class NetGame {
     if (e.weapon !== 'knife') {
       this.ctx.effects.tracer(from, to);
       if (e.hitWall) { this.ctx.effects.impact(to); sfx.impact(to); }
-      (e.weapon === 'kar98k' ? sfx.sniper : sfx.shot).call(sfx, from);
+      ({ kar98k: sfx.sniper, glock: sfx.pistol }[e.weapon] || sfx.shot).call(sfx, from);
+      this.remoteShell(e.weapon, from, e.dir, av);
     } else {
       sfx.knife(from);
     }
   }
 
+  /** Douille éjectée par l'arme d'un autre joueur */
+  remoteShell(weapon, muzzle, dir, av) {
+    if (!dir || (av && av.dead)) return;
+    const back = weapon === 'glock' ? 0.12 : weapon === 'kar98k' ? 0.55 : 0.42;
+    const pos = { x: muzzle.x - dir.x * back, y: muzzle.y + 0.03, z: muzzle.z - dir.z * back };
+    const len = Math.hypot(dir.x, dir.z) || 1;
+    const rx = -dir.z / len, rz = dir.x / len; // vers la droite du tireur
+    const vel = { x: rx * 1.8 + (Math.random() - 0.5) * 0.4, y: 1.6 + Math.random() * 0.5, z: rz * 1.8 + (Math.random() - 0.5) * 0.4 };
+    const floor = av ? av.group.position.y : 0;
+    const go = () => this.ctx.effects.shell(weapon, pos, vel, floor);
+    if (weapon === 'kar98k') setTimeout(go, 420); else go();
+  }
+
   onHitConfirm(e) {
     this.ctx.hud.hitmarker(e.headshot);
-    if (e.kill) sfx.kill(); else sfx.hit(e.headshot);
+    if (e.kill) { this.streak++; sfx.killStreak(this.streak, settings.killSound); }
+    else sfx.hit(e.headshot);
   }
 
   onDamaged(e) {

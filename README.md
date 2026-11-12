@@ -132,12 +132,26 @@ Render redéploie automatiquement en 2-3 minutes.
 | S'accroupir | C |
 | Recharger | R |
 | Inspecter l'arme | Y |
-| Arme principale / Couteau | 1 / 2 ou molette |
+| Arme principale / Glock 18 / Couteau | 1 / 2 / 3 ou molette |
 | Choisir son loadout | M — en jeu, même mort en attendant de réapparaître |
 | Tableau des scores | Tab |
 | Pause / libérer la souris | Échap |
 
-Les paramètres (touches, sensibilité, FOV, volume, skins) sont sauvegardés dans le navigateur.
+Les paramètres (touches, sensibilité, FOV, volumes, viseur, skins) sont sauvegardés dans le navigateur.
+
+**Boutons de la souris :** dans ⚙ Paramètres → Commandes, clique sur une action puis appuie sur une touche
+**ou** sur un bouton de souris (clic molette, boutons latéraux « Souris 4 / 5 », molette haut/bas).
+
+**Viseur (réticule) :** ⚙ Paramètres → Viseur : forme (croix, T, cercle, point, croix + point), couleur,
+longueur, écart, épaisseur, opacité, contour, point central, dynamique ou fixe. Aperçu en direct.
+
+**Son :** ⚙ Paramètres → Son & graphismes : volume général, effets, musique des menus, et le pack de sons de kill
+(Classique, Néon, Impact) avec un bouton pour les écouter. Les kills d'affilée montent dans les aigus jusqu'au 4e,
+le 5e a son petit son spécial. Ajouter un pack : `KILL_PACKS` dans `public/js/audio.js`.
+
+**Qualité graphique :** Basse (PC modestes), Moyenne, Haute (ombres douces, halo lumineux, anticrénelage, détails du décor).
+
+**Ping :** affiché dans le tableau des scores (Tab), à côté de chaque joueur (« BOT » pour les bots).
 
 **Précision :** sans viser, les armes sont imprécises (même immobile) ; en visant (clic droit) elles sont très précises.
 Le Kar98k dans la lunette est parfaitement précis si tu ne bouges pas.
@@ -146,8 +160,10 @@ Le Kar98k dans la lunette est parfaitement précis si tu ne bouges pas.
 Si ton navigateur ne le permet pas, il te demande au moins une confirmation avant de fermer l'onglet.
 Option désactivable dans ⚙ Paramètres.
 
-**Menu :** onglets **Jouer** (créer / rejoindre une partie, entraînement), **Personnage** (skins de tenue et d'armes),
-**Inventaire** (5 loadouts : arme principale + viseur, celui marqué « Équipé » est utilisé en jeu).
+**Menu :** onglets **Jouer** (créer / rejoindre une partie, entraînement), **Personnage** (tenue du personnage),
+**Inventaire** (5 loadouts façon armurerie : 3 cartes **Arme principale** (+ viseur), **Arme secondaire** (Glock 18)
+et **Couteau** ; clique sur une carte pour changer l'arme, le viseur et le skin. Le loadout « Équipé » est utilisé en jeu).
+**Musique :** `public/sounds/lobby_music.mp3` tourne en boucle dans les menus et le salon (volume réglable).
 Pour ajouter un skin : `shared/skins.js` (une ligne = un skin).
 
 **Sons :** les bruitages sont dans `public/sounds/` (générés avec ElevenLabs). Pour en changer un, remplace le
@@ -182,11 +198,13 @@ arena-fps/
         ├── main.js       ← point d'entrée, boucle de jeu, menus
         ├── world.js      ← scène 3D, lumières, construction de la map
         ├── player.js     ← déplacements du joueur
-        ├── weapons.js    ← AK-47, couteau, recul, rechargement
+        ├── weapons.js    ← AK-47, Kar98k, Glock 18, couteau : modèles, animations, recul, rechargement
         ├── avatars.js    ← personnages des autres joueurs (contour violet/orange selon l'équipe)
         ├── models.js     ← outils pour fabriquer les modèles 3D (boîtes, bras, contour)
         ├── textures.js   ← textures réalistes dessinées par le code (béton, bois, tôle…)
-        ├── effects.js    ← traçantes, impacts
+        ├── effects.js    ← traçantes, impacts, douilles éjectées
+        ├── body.js       ← tes jambes et ton ombre (vue à la 1re personne)
+        ├── crosshair.js  ← dessin du viseur personnalisable
         ├── hud.js        ← PV, munitions, killfeed…
         ├── audio.js      ← sons générés par code
         ├── settings.js   ← paramètres sauvegardés
