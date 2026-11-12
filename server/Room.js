@@ -1,0 +1,402 @@
+// =====================================================================
+//  Room.js — Une partie (un "salon") côté serveur.
+//  C'est ICI que se décident les PV, les kills et le score :
+//  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
+// =====================================================================
+
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES } from '../shared/constants.js';
+import { sanitizeSkins } from '../shared/skins.js';
+import { MAP_BOXES, SPAWNS } from '../shared/map.js';
+import { traceShot } from '../shared/physics.js';
+
+const MODES = { '1v1': 1, '2v2': 2 };
+
+export class Room {
+  constructor(code, io, onEmpty) {
+    this.code = code;
+    this.io = io;
+    this.onEmpty = onEmpty;
+    this.players = new Map();   // socket.id -> données du joueur
+    this.hostId = null;
+    this.mode = '1v1';
+    this.state = 'lobby';       // 'lobby' | 'playing' | 'ended'
+    this.phase = null;          // pendant la partie : 'freeze' | 'live' | 'roundEnd'
+    this.phaseEnd = 0;          // timestamp (ms) de fin de la phase en cours
+    this.score = { A: 0, B: 0 };
+    this.round = 0;
+    this.winner = null;
+    this.tickTimer = setInterval(() => this.tick(), 1000 / MATCH.TICK_RATE);
+  }
+
+  // ---------------------------------------------------------------
+  //  Gestion des joueurs
+  // ---------------------------------------------------------------
+  get teamSize() { return MODES[this.mode]; }
+
+  teamCount(team) {
+    let n = 0;
+    for (const p of this.players.values()) if (p.team === team) n++;
+    return n;
+  }
+
+  addPlayer(socket, name, skins, primary) {
+    if (this.state !== 'lobby') return 'La partie a déjà commencé.';
+    if (this.players.size >= 4) return 'Le salon est plein.';
+    const p = {
+      id: socket.id,
+      name: String(name || 'Joueur').slice(0, 16),
+      team: null, ready: false,
+      x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false,
+      hp: PLAYER.MAX_HP, alive: false,
+      skins: sanitizeSkins(skins),
+      primary: PRIMARIES.includes(primary) ? primary : 'ak', // arme utilisée cette manche
+      nextPrimary: null,                                     // arme choisie pour la prochaine apparition
+      weapon: 'ak', mag: 0, reserve: 0, reloadEnd: 0, lastShot: 0,
+      kills: 0, deaths: 0, lastMove: Date.now(),
+    };
+    // Place automatiquement le joueur dans l'équipe la moins remplie
+    for (const t of ['A', 'B']) {
+      if (this.teamCount(t) < this.teamSize && (!p.team || this.teamCount(t) < this.teamCount(p.team))) p.team = t;
+    }
+    this.players.set(socket.id, p);
+    if (!this.hostId) this.hostId = socket.id;
+    socket.join(this.code);
+    this.sendLobby();
+    return null;
+  }
+
+  removePlayer(id) {
+    const p = this.players.get(id);
+    if (!p) return;
+    this.players.delete(id);
+    if (this.hostId === id) this.hostId = this.players.keys().next().value || null;
+    if (this.players.size === 0) return this.destroy();
+
+    this.feed({ type: 'leave', name: p.name });
+    if (this.state === 'playing') {
+      // Si une équipe n'a plus personne, la partie s'arrête
+      if (this.teamCount('A') === 0 || this.teamCount('B') === 0) {
+        this.backToLobby('Un joueur a quitté la partie.');
+      } else {
+        this.checkRoundOver();
+      }
+    } else {
+      this.sendLobby();
+    }
+  }
+
+  setMode(id, mode) {
+    if (id !== this.hostId || this.state !== 'lobby' || !MODES[mode]) return;
+    this.mode = mode;
+    // Si on passe en 1v1, on retire de l'équipe les joueurs en trop
+    for (const t of ['A', 'B']) {
+      let n = 0;
+      for (const p of this.players.values()) {
+        if (p.team === t && ++n > this.teamSize) { p.team = null; p.ready = false; }
+      }
+    }
+    for (const p of this.players.values()) p.ready = false;
+    this.sendLobby();
+  }
+
+  setTeam(id, team) {
+    const p = this.players.get(id);
+    if (!p || this.state !== 'lobby') return;
+    if (team !== null && !TEAMS[team]) return;
+    if (team && p.team !== team && this.teamCount(team) >= this.teamSize) return; // équipe pleine
+    p.team = team;
+    p.ready = false;
+    this.sendLobby();
+  }
+
+  setReady(id, ready) {
+    const p = this.players.get(id);
+    if (!p || this.state !== 'lobby' || !p.team) return;
+    p.ready = !!ready;
+    this.sendLobby();
+    this.tryStart();
+  }
+
+  // La partie démarre quand les deux équipes sont complètes et tout le monde est prêt
+  tryStart() {
+    const n = this.teamSize;
+    if (this.teamCount('A') !== n || this.teamCount('B') !== n) return;
+    for (const p of this.players.values()) if (p.team && !p.ready) return;
+    this.startMatch();
+  }
+
+  /** Skins choisis dans le casier */
+  setSkins(id, skins) {
+    const p = this.players.get(id);
+    if (!p) return;
+    p.skins = sanitizeSkins(skins);
+    this.sendLobby();
+  }
+
+  /**
+   * Choix de l'arme principale (touche M).
+   * - Au lobby ou pendant la préparation de manche : appliqué tout de suite
+   * - Sinon : appliqué à la prochaine apparition
+   */
+  setLoadout(id, weapon) {
+    const p = this.players.get(id);
+    if (!p || !PRIMARIES.includes(weapon)) return;
+    if (this.state !== 'playing') { p.primary = weapon; p.nextPrimary = null; return; }
+    if (this.phase === 'freeze' && p.alive) {
+      this.equip(p, weapon);
+      this.io.to(id).emit('loadout', { primary: weapon, applied: true });
+    } else {
+      p.nextPrimary = weapon;
+      this.io.to(id).emit('loadout', { primary: weapon, applied: false });
+    }
+  }
+
+  /** Donne une arme principale avec chargeur plein */
+  equip(p, weapon) {
+    p.primary = weapon;
+    p.nextPrimary = null;
+    p.weapon = weapon;
+    p.mag = WEAPONS[weapon].magSize;
+    p.reserve = WEAPONS[weapon].reserve;
+    p.reloadEnd = 0;
+  }
+
+  sendLobby() {
+    this.io.to(this.code).emit('lobby', {
+      code: this.code,
+      mode: this.mode,
+      hostId: this.hostId,
+      state: this.state,
+      players: [...this.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, ready: p.ready, skins: p.skins })),
+    });
+  }
+
+  // ---------------------------------------------------------------
+  //  Déroulement de la partie
+  // ---------------------------------------------------------------
+  startMatch() {
+    this.state = 'playing';
+    this.score = { A: 0, B: 0 };
+    this.round = 0;
+    this.winner = null;
+    for (const p of this.players.values()) { p.kills = 0; p.deaths = 0; }
+    this.io.to(this.code).emit('matchStart', { mode: this.mode });
+    this.startRound();
+  }
+
+  startRound() {
+    this.round++;
+    const used = { A: 0, B: 0 };
+    for (const p of this.players.values()) {
+      if (!p.team) { p.alive = false; continue; }
+      const s = SPAWNS[p.team][used[p.team]++ % SPAWNS[p.team].length];
+      Object.assign(p, {
+        x: s.x, y: 0, z: s.z, yaw: s.yaw, pitch: 0, crouch: false,
+        hp: PLAYER.MAX_HP, alive: true, lastMove: Date.now(),
+      });
+      this.equip(p, p.nextPrimary || p.primary);
+      // On force la position côté client (téléportation au spawn)
+      this.io.to(p.id).emit('spawn', { x: s.x, y: 0, z: s.z, yaw: s.yaw, primary: p.primary });
+    }
+    this.setPhase('freeze', MATCH.FREEZE_TIME);
+  }
+
+  setPhase(phase, seconds) {
+    this.phase = phase;
+    this.phaseEnd = Date.now() + seconds * 1000;
+  }
+
+  // Une manche est finie si une équipe n'a plus de survivant
+  checkRoundOver() {
+    if (this.state !== 'playing' || this.phase !== 'live') return;
+    const alive = { A: 0, B: 0 };
+    for (const p of this.players.values()) if (p.alive && p.team) alive[p.team]++;
+    if (alive.A === 0 || alive.B === 0) {
+      this.endRound(alive.A === 0 && alive.B === 0 ? null : alive.A > 0 ? 'A' : 'B', 'elimination');
+    }
+  }
+
+  endRound(winnerTeam, reason) {
+    if (winnerTeam) this.score[winnerTeam]++;
+    this.io.to(this.code).emit('roundEnd', { winner: winnerTeam, reason, score: this.score });
+    if (winnerTeam && this.score[winnerTeam] >= MATCH.WIN_SCORE) {
+      this.winner = winnerTeam;
+      this.setPhase('roundEnd', 2.5); // petite pause avant l'écran de fin
+    } else {
+      this.setPhase('roundEnd', MATCH.ROUND_END_TIME);
+    }
+  }
+
+  // Temps écoulé : l'équipe avec le plus de survivants gagne, puis le plus de PV
+  timeUp() {
+    const alive = { A: 0, B: 0 }, hp = { A: 0, B: 0 };
+    for (const p of this.players.values()) {
+      if (p.alive && p.team) { alive[p.team]++; hp[p.team] += p.hp; }
+    }
+    let w = null;
+    if (alive.A !== alive.B) w = alive.A > alive.B ? 'A' : 'B';
+    else if (hp.A !== hp.B) w = hp.A > hp.B ? 'A' : 'B';
+    this.endRound(w, 'time');
+  }
+
+  endMatch() {
+    this.state = 'ended';
+    this.phase = null;
+    this.io.to(this.code).emit('matchEnd', {
+      winner: this.winner,
+      score: this.score,
+      players: [...this.players.values()].map(p => ({ name: p.name, team: p.team, kills: p.kills, deaths: p.deaths })),
+    });
+  }
+
+  // "Rejouer" : tout le monde revient au lobby avec les mêmes équipes
+  backToLobby(message) {
+    this.state = 'lobby';
+    this.phase = null;
+    for (const p of this.players.values()) { p.ready = false; p.alive = false; }
+    this.io.to(this.code).emit('backToLobby', { message: message || null });
+    this.sendLobby();
+  }
+
+  // ---------------------------------------------------------------
+  //  Actions envoyées par les joueurs
+  // ---------------------------------------------------------------
+
+  // Le client envoie sa position. On vérifie qu'il ne va pas trop vite (anti-téléportation).
+  onMove(id, data) {
+    const p = this.players.get(id);
+    if (!p || !p.alive || this.state !== 'playing') return;
+    const now = Date.now();
+    const nums = [data.x, data.y, data.z, data.yaw, data.pitch];
+    if (nums.some(n => typeof n !== 'number' || !isFinite(n))) return;
+
+    if (this.phase === 'freeze') { p.yaw = data.yaw; p.pitch = data.pitch; return; }
+
+    const dt = Math.min((now - p.lastMove) / 1000, 0.5);
+    const dist = Math.hypot(data.x - p.x, data.z - p.z);
+    const maxDist = PLAYER.SLIDE_SPEED * 1.3 * dt + 0.6; // vitesse max = glissade // marge pour la latence
+    if (dist > maxDist || Math.abs(data.y - p.y) > 8 * dt + 1.5) {
+      // Mouvement suspect : on renvoie le joueur à sa dernière position valide
+      this.io.to(id).emit('correct', { x: p.x, y: p.y, z: p.z });
+      p.lastMove = now;
+      return;
+    }
+    p.x = data.x; p.y = data.y; p.z = data.z;
+    p.yaw = data.yaw;
+    p.pitch = Math.max(-1.55, Math.min(1.55, data.pitch));
+    p.crouch = !!data.crouch;
+    p.lastMove = now;
+  }
+
+  onSwitch(id, weapon) {
+    const p = this.players.get(id);
+    if (!p || (weapon !== p.primary && weapon !== 'knife')) return;
+    p.weapon = weapon;
+    p.reloadEnd = 0; // changer d'arme annule le rechargement
+  }
+
+  onReload(id) {
+    const p = this.players.get(id);
+    if (!p || !p.alive || p.weapon !== p.primary) return;
+    const w = WEAPONS[p.primary];
+    if (p.reloadEnd || p.mag >= w.magSize || p.reserve <= 0) return;
+    p.reloadEnd = Date.now() + w.reloadTime * 1000;
+  }
+
+  // Le client dit "je tire dans cette direction". Le serveur vérifie tout le reste.
+  onShoot(id, data) {
+    const p = this.players.get(id);
+    if (!p || !p.alive || this.state !== 'playing' || this.phase !== 'live') return;
+    const w = WEAPONS[data.weapon];
+    if (!w || data.weapon !== p.weapon) return;
+    const d = data.dir;
+    if (!d || ![d.x, d.y, d.z].every(n => typeof n === 'number' && isFinite(n))) return;
+    const len = Math.hypot(d.x, d.y, d.z);
+    if (len < 0.5) return;
+    const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
+
+    const now = Date.now();
+    // Cadence de tir (avec une petite tolérance réseau)
+    if (now - p.lastShot < w.fireInterval * 1000 * 0.8) return;
+    if (data.weapon !== 'knife') {
+      if (p.reloadEnd || p.mag <= 0) return;
+      p.mag--;
+    }
+    p.lastShot = now;
+
+    // Le tir part des yeux du joueur, à la position connue du serveur
+    const eye = { x: p.x, y: p.y + (p.crouch ? PLAYER.CROUCH_EYE : PLAYER.EYE), z: p.z };
+    const enemies = [...this.players.values()].filter(o => o.alive && o.team && o.team !== p.team);
+    const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, 0.06);
+
+    // Les autres joueurs voient le tir (traçante, son)
+    const endDist = hit ? hit.dist : Math.min(wallDist, w.range);
+    this.io.to(this.code).emit('shot', { id, weapon: data.weapon, from: eye, dir, dist: endDist, hitWall: !hit && wallDist < w.range });
+
+    if (hit) this.damage(p, this.players.get(hit.id), hit.headshot ? w.headDamage : w.damage, hit.headshot, data.weapon);
+  }
+
+  damage(attacker, victim, amount, headshot, weapon) {
+    if (!victim || !victim.alive) return;
+    victim.hp = Math.max(0, victim.hp - amount);
+    this.io.to(attacker.id).emit('hitConfirm', { headshot, kill: victim.hp <= 0 });
+    this.io.to(victim.id).emit('damaged', { from: { x: attacker.x, z: attacker.z }, hp: victim.hp });
+    if (victim.hp <= 0) {
+      victim.alive = false;
+      victim.deaths++;
+      attacker.kills++;
+      this.feed({ type: 'kill', killer: attacker.name, killerTeam: attacker.team, victim: victim.name, victimTeam: victim.team, weapon, headshot });
+      this.checkRoundOver();
+    }
+  }
+
+  feed(entry) { this.io.to(this.code).emit('feed', entry); }
+
+  // ---------------------------------------------------------------
+  //  Boucle serveur : timers + envoi de l'état aux clients
+  // ---------------------------------------------------------------
+  tick() {
+    if (this.state !== 'playing') return;
+    const now = Date.now();
+
+    // Rechargements terminés
+    for (const p of this.players.values()) {
+      if (p.reloadEnd && now >= p.reloadEnd) {
+        const need = WEAPONS[p.primary].magSize - p.mag;
+        const take = Math.min(need, p.reserve);
+        p.mag += take; p.reserve -= take; p.reloadEnd = 0;
+      }
+    }
+
+    // Changements de phase
+    if (now >= this.phaseEnd) {
+      if (this.phase === 'freeze') this.setPhase('live', MATCH.ROUND_TIME);
+      else if (this.phase === 'live') this.timeUp();
+      else if (this.phase === 'roundEnd') {
+        if (this.winner) return this.endMatch();
+        this.startRound();
+      }
+    }
+
+    // Snapshot envoyé à tout le monde
+    this.io.to(this.code).volatile.emit('state', {
+      phase: this.phase,
+      timeLeft: Math.max(0, (this.phaseEnd - now) / 1000),
+      round: this.round,
+      score: this.score,
+      players: [...this.players.values()].map(p => ({
+        id: p.id, name: p.name, team: p.team,
+        x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3),
+        yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
+        crouch: p.crouch, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary,
+        mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd,
+        kills: p.kills, deaths: p.deaths,
+      })),
+    });
+  }
+
+  destroy() {
+    clearInterval(this.tickTimer);
+    this.onEmpty(this.code);
+  }
+}

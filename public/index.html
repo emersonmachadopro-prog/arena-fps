@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Arena Strike — FPS navigateur</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎯</text></svg>" />
+  <link rel="stylesheet" href="/css/style.css" />
+  <!-- Three.js est servi par notre serveur depuis node_modules -->
+  <script type="importmap">
+    { "imports": { "three": "/vendor/three/three.module.js", "three/addons/": "/vendor/three-addons/" } }
+  </script>
+  <!-- Client Socket.io (fourni automatiquement par le serveur) -->
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <!-- Le canvas 3D est ajouté ici par le JS -->
+  <div id="game"></div>
+  <div id="menu-backdrop"></div>
+
+  <!-- ===================== HUD (affiché en jeu) ===================== -->
+  <div id="hud" class="hidden">
+    <div id="scope" class="hidden"><i class="h"></i><i class="v"></i><b></b></div>
+    <div id="crosshair"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i></div>
+    <div id="hitmarker"></div>
+    <div id="damage-vignette"></div>
+    <div id="damage-arrow"></div>
+
+    <div id="topbar">
+      <div class="team-score A"><span id="score-A">0</span></div>
+      <div id="round-timer">1:30</div>
+      <div class="team-score B"><span id="score-B">0</span></div>
+    </div>
+    <div id="round-label"></div>
+
+    <div id="killfeed"></div>
+    <div id="center-msg"></div>
+    <div id="sub-msg"></div>
+    <div id="dead-hint" class="hidden">Appuie sur <b id="dead-key">M</b> pour changer d'arme</div>
+
+    <div id="hp-box"><span class="label">PV</span><span id="hp">100</span><div id="hp-bar"><div></div></div></div>
+    <div id="ammo-box">
+      <div id="weapon-name">AK-47</div>
+      <div><span id="ammo-mag">30</span><span id="ammo-res"> / 90</span></div>
+      <div id="weapon-slots"><span>1 AK-47</span><span>2 Couteau</span></div>
+    </div>
+
+    <div id="scoreboard" class="hidden"></div>
+  </div>
+
+  <!-- ===================== MENUS ===================== -->
+  <div id="menus">
+
+    <!-- Menu principal -->
+    <section id="menu-main" class="screen hidden">
+      <div class="main-col">
+        <div class="logo">ARENA<span>STRIKE</span></div>
+        <p class="tagline">FPS 1v1 · 2v2 entre potes — direct dans le navigateur</p>
+
+        <div class="card profile">
+          <div class="avatar-dot" id="profile-dot">?</div>
+          <input id="name-input" maxlength="16" placeholder="Ton pseudo" />
+        </div>
+
+        <div class="card">
+          <div class="card-title">🌐 Jouer en ligne</div>
+          <button id="btn-create" class="big primary">Créer une partie</button>
+          <div class="join-row">
+            <input id="code-input" maxlength="5" placeholder="CODE" class="code" />
+            <button id="btn-join" class="big">Rejoindre</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">🎯 Entraînement</div>
+          <div class="tiles">
+            <button id="btn-solo-passive" class="tile"><b>Bots passifs</b><small>Pour travailler ta visée</small></button>
+            <button id="btn-solo-active" class="tile"><b>Bots qui tirent</b><small>Ils ripostent !</small></button>
+          </div>
+        </div>
+
+        <div class="tiles">
+          <button id="btn-locker-main" class="tile small-tile">🎨 Casier <small>Skins & armes</small></button>
+          <button id="btn-settings-main" class="tile small-tile">⚙ Paramètres <small>Touches, souris…</small></button>
+        </div>
+        <p id="main-error" class="error"></p>
+      </div>
+
+      <div class="side-col">
+        <div class="card">
+          <div class="card-title">🎮 Commandes</div>
+          <div id="controls-list" class="controls"></div>
+        </div>
+        <div class="card" id="equipped-card"></div>
+      </div>
+    </section>
+
+    <!-- Lobby -->
+    <section id="menu-lobby" class="panel wide hidden">
+      <div class="lobby-head">
+        <div>
+          <div class="kicker">Salon</div>
+          <div id="lobby-code" class="big-code">-----</div>
+        </div>
+        <button id="btn-copy-link">🔗 Copier le lien d'invitation</button>
+      </div>
+
+      <div class="segmented">
+        <button class="mode-btn" data-mode="1v1">1 vs 1</button>
+        <button class="mode-btn" data-mode="2v2">2 vs 2</button>
+        <span id="mode-hint" class="hint"></span>
+      </div>
+
+      <div class="teams">
+        <div class="team A"><div class="team-head"><h3>Équipe Violet</h3><button class="join-team small" data-team="A">Rejoindre</button></div><ul id="team-A"></ul></div>
+        <div class="vs">VS</div>
+        <div class="team B"><div class="team-head"><h3>Équipe Orange</h3><button class="join-team small" data-team="B">Rejoindre</button></div><ul id="team-B"></ul></div>
+      </div>
+      <div id="spectators" class="hint"></div>
+
+      <div class="lobby-actions">
+        <button id="btn-ready" class="big primary">Prêt</button>
+        <button id="btn-locker-lobby" class="big">🎨 Skins & armes</button>
+        <button id="btn-leave" class="ghost">Quitter</button>
+      </div>
+      <p id="lobby-status" class="hint center"></p>
+    </section>
+
+    <!-- Casier : skins + arme principale -->
+    <section id="menu-locker" class="panel wide hidden">
+      <h2>🎨 Casier</h2>
+      <div class="locker-tabs">
+        <button data-tab="character" class="active">Personnage</button>
+        <button data-tab="ak">AK-47</button>
+        <button data-tab="kar98k">Kar98k</button>
+        <button data-tab="knife">Couteau</button>
+      </div>
+      <div id="locker-grid" class="skin-grid"></div>
+      <h3>Arme principale</h3>
+      <div id="locker-primary" class="weapon-cards"></div>
+      <div class="row"><button id="btn-locker-back" class="primary big">Retour</button></div>
+    </section>
+
+    <!-- Choix d'arme en jeu (touche M) -->
+    <section id="menu-loadout" class="panel wide hidden">
+      <h2>Choisis ton arme</h2>
+      <p id="loadout-hint" class="hint"></p>
+      <div id="loadout-cards" class="weapon-cards"></div>
+      <div class="row"><button id="btn-loadout-close" class="ghost">Fermer</button></div>
+    </section>
+
+    <!-- Pause -->
+    <section id="menu-pause" class="panel hidden">
+      <h2>Pause</h2>
+      <p class="hint" id="pause-hint"></p>
+      <div class="col">
+        <button id="btn-resume" class="big primary">Reprendre</button>
+        <button id="btn-loadout-pause" class="big">🔫 Changer d'arme</button>
+        <button id="btn-settings-pause" class="big">⚙ Paramètres</button>
+        <button id="btn-quit" class="ghost">Quitter la partie</button>
+      </div>
+    </section>
+
+    <!-- Paramètres -->
+    <section id="menu-settings" class="panel wide hidden">
+      <h2>⚙ Paramètres</h2>
+      <div class="settings-grid">
+        <div>
+          <h3>Touches</h3>
+          <p class="hint">Clique sur une touche puis appuie sur la nouvelle (Échap pour annuler). Tir = clic gauche, viser = clic droit.</p>
+          <div id="keybinds"></div>
+        </div>
+        <div>
+          <h3>Souris & affichage</h3>
+          <label class="slider">Sensibilité <input type="range" id="set-sens" min="0.1" max="4" step="0.05" /><output id="out-sens"></output></label>
+          <label class="slider">Champ de vision (FOV) <input type="range" id="set-fov" min="60" max="110" step="1" /><output id="out-fov"></output></label>
+          <label class="slider">Volume <input type="range" id="set-vol" min="0" max="1" step="0.01" /><output id="out-vol"></output></label>
+          <label class="check"><input type="checkbox" id="set-invert" /> Inverser l'axe vertical</label>
+          <label class="check"><input type="checkbox" id="set-fullscreen" /> Plein écran en jeu <span class="hint">(bloque Ctrl+W sur Chrome/Edge)</span></label>
+          <div class="row"><button id="btn-reset-settings" class="ghost small">Valeurs par défaut</button></div>
+        </div>
+      </div>
+      <div class="row"><button id="btn-settings-back" class="primary big">Retour</button></div>
+    </section>
+
+    <!-- Fin de partie -->
+    <section id="menu-end" class="panel hidden">
+      <h2 id="end-title" class="center">Victoire !</h2>
+      <div id="end-score" class="end-score"></div>
+      <table id="end-stats"></table>
+      <div class="row center-row">
+        <button id="btn-replay" class="big primary">Rejouer</button>
+        <button id="btn-end-quit" class="ghost">Menu principal</button>
+      </div>
+      <p id="end-hint" class="hint center"></p>
+    </section>
+
+    <!-- Écran "cliquer pour jouer" (le navigateur exige un clic pour capturer la souris) -->
+    <section id="menu-click" class="panel hidden click-panel">
+      <h2>Clique pour jouer</h2>
+      <p class="hint">La souris sera capturée. Appuie sur Échap pour la libérer.</p>
+    </section>
+  </div>
+
+  <div id="toast"></div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
