@@ -4,7 +4,8 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, BOT_LEVELS, validOptic } from '../shared/constants.js';
+import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
 import { traceShot } from '../shared/physics.js';
@@ -39,21 +40,34 @@ export class Room {
     return n;
   }
 
-  addPlayer(socket, name, skins, primary) {
-    if (this.state !== 'lobby') return 'La partie a déjà commencé.';
-    if (this.players.size >= 4) return 'Le salon est plein.';
-    const p = {
-      id: socket.id,
+  get humans() { return [...this.players.values()].filter(p => !p.isBot); }
+
+  /** Crée les données d'un joueur (humain ou bot) */
+  makePlayer(id, name, skins, loadout) {
+    const lo = sanitizeLoadout(loadout);
+    return {
+      id,
       name: String(name || 'Joueur').slice(0, 16),
       team: null, ready: false,
       x: 0, y: 0, z: 0, yaw: 0, pitch: 0, crouch: false,
       hp: PLAYER.MAX_HP, alive: false,
       skins: sanitizeSkins(skins),
-      primary: PRIMARIES.includes(primary) ? primary : 'ak', // arme utilisée cette manche
-      nextPrimary: null,                                     // arme choisie pour la prochaine apparition
+      primary: lo.primary, optic: lo.optic, // loadout utilisé cette manche
+      nextLoadout: null,                    // loadout choisi pour la prochaine apparition
       weapon: 'ak', mag: 0, reserve: 0, reloadEnd: 0, lastShot: 0,
       kills: 0, deaths: 0, lastMove: Date.now(),
     };
+  }
+
+  addPlayer(socket, name, skins, loadout) {
+    if (this.state !== 'lobby') return 'La partie a déjà commencé.';
+    if (this.humans.length >= 4) return 'Le salon est plein.';
+    // Plus de place ? On retire un bot pour laisser la place à un vrai joueur
+    if (this.players.size >= 4) {
+      const bot = [...this.players.values()].find(b => b.isBot);
+      if (bot) this.players.delete(bot.id);
+    }
+    const p = this.makePlayer(socket.id, name, skins, loadout);
     // Place automatiquement le joueur dans l'équipe la moins remplie
     for (const t of ['A', 'B']) {
       if (this.teamCount(t) < this.teamSize && (!p.team || this.teamCount(t) < this.teamCount(p.team))) p.team = t;
@@ -69,8 +83,9 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     this.players.delete(id);
-    if (this.hostId === id) this.hostId = this.players.keys().next().value || null;
-    if (this.players.size === 0) return this.destroy();
+    // Plus aucun vrai joueur : on ferme le salon (les bots ne jouent pas seuls)
+    if (this.humans.length === 0) return this.destroy();
+    if (this.hostId === id) this.hostId = this.humans[0].id;
 
     this.feed({ type: 'leave', name: p.name });
     if (this.state === 'playing') {
@@ -91,11 +106,14 @@ export class Room {
     // Si on passe en 1v1, on retire de l'équipe les joueurs en trop
     for (const t of ['A', 'B']) {
       let n = 0;
-      for (const p of this.players.values()) {
-        if (p.team === t && ++n > this.teamSize) { p.team = null; p.ready = false; }
+      for (const p of [...this.players.values()]) {
+        if (p.team === t && ++n > this.teamSize) {
+          if (p.isBot) this.players.delete(p.id); // bot en trop : supprimé
+          else { p.team = null; p.ready = false; }
+        }
       }
     }
-    for (const p of this.players.values()) p.ready = false;
+    for (const p of this.players.values()) if (!p.isBot) p.ready = false;
     this.sendLobby();
   }
 
@@ -125,6 +143,29 @@ export class Room {
     this.startMatch();
   }
 
+  // ---------------------------------------------------------------
+  //  Bots (ajoutés par l'hôte pour compléter une équipe)
+  // ---------------------------------------------------------------
+  addBot(id, team, level) {
+    if (id !== this.hostId || this.state !== 'lobby' || !TEAMS[team] || !BOT_LEVELS[level]) return;
+    if (this.teamCount(team) >= this.teamSize || this.players.size >= 4) return;
+    const n = [...this.players.values()].filter(p => p.isBot).length + 1;
+    const skinsList = ['desert', 'jungle', 'arctic', 'shadow', 'royal'];
+    const bot = this.makePlayer(`bot-${Date.now()}-${n}`, `Bot ${BOT_LEVELS[level].name}`,
+      { character: skinsList[Math.floor(Math.random() * skinsList.length)] }, { primary: 'ak', optic: 'iron' });
+    Object.assign(bot, { name: `Bot ${BOT_LEVELS[level].name}`, isBot: true, level, team, ready: true, brain: new BotBrain(level) });
+    this.players.set(bot.id, bot);
+    this.sendLobby();
+    this.tryStart();
+  }
+
+  removeBot(id, botId) {
+    const b = this.players.get(botId);
+    if (id !== this.hostId || this.state !== 'lobby' || !b?.isBot) return;
+    this.players.delete(botId);
+    this.sendLobby();
+  }
+
   /** Skins choisis dans le casier */
   setSkins(id, skins) {
     const p = this.players.get(id);
@@ -138,26 +179,28 @@ export class Room {
    * - Au lobby ou pendant la préparation de manche : appliqué tout de suite
    * - Sinon : appliqué à la prochaine apparition
    */
-  setLoadout(id, weapon) {
+  setLoadout(id, data) {
     const p = this.players.get(id);
-    if (!p || !PRIMARIES.includes(weapon)) return;
-    if (this.state !== 'playing') { p.primary = weapon; p.nextPrimary = null; return; }
+    if (!p) return;
+    const lo = sanitizeLoadout(data);
+    if (this.state !== 'playing') { p.primary = lo.primary; p.optic = lo.optic; p.nextLoadout = null; this.sendLobby(); return; }
     if (this.phase === 'freeze' && p.alive) {
-      this.equip(p, weapon);
-      this.io.to(id).emit('loadout', { primary: weapon, applied: true });
+      this.equip(p, lo);
+      this.io.to(id).emit('loadout', { ...lo, applied: true });
     } else {
-      p.nextPrimary = weapon;
-      this.io.to(id).emit('loadout', { primary: weapon, applied: false });
+      p.nextLoadout = lo;
+      this.io.to(id).emit('loadout', { ...lo, applied: false });
     }
   }
 
-  /** Donne une arme principale avec chargeur plein */
-  equip(p, weapon) {
-    p.primary = weapon;
-    p.nextPrimary = null;
-    p.weapon = weapon;
-    p.mag = WEAPONS[weapon].magSize;
-    p.reserve = WEAPONS[weapon].reserve;
+  /** Donne une arme principale (+ viseur) avec chargeur plein */
+  equip(p, lo) {
+    p.primary = lo.primary;
+    p.optic = lo.optic;
+    p.nextLoadout = null;
+    p.weapon = lo.primary;
+    p.mag = WEAPONS[lo.primary].magSize;
+    p.reserve = WEAPONS[lo.primary].reserve;
     p.reloadEnd = 0;
   }
 
@@ -167,7 +210,10 @@ export class Room {
       mode: this.mode,
       hostId: this.hostId,
       state: this.state,
-      players: [...this.players.values()].map(p => ({ id: p.id, name: p.name, team: p.team, ready: p.ready, skins: p.skins })),
+      players: [...this.players.values()].map(p => ({
+        id: p.id, name: p.name, team: p.team, ready: p.ready, skins: p.skins,
+        primary: p.primary, optic: p.optic, isBot: !!p.isBot, level: p.level || null,
+      })),
     });
   }
 
@@ -194,9 +240,11 @@ export class Room {
         x: s.x, y: 0, z: s.z, yaw: s.yaw, pitch: 0, crouch: false,
         hp: PLAYER.MAX_HP, alive: true, lastMove: Date.now(),
       });
-      this.equip(p, p.nextPrimary || p.primary);
+      p.vel = { x: 0, y: 0, z: 0 };
+      p.brain?.reset();
+      this.equip(p, p.nextLoadout || { primary: p.primary, optic: p.optic });
       // On force la position côté client (téléportation au spawn)
-      this.io.to(p.id).emit('spawn', { x: s.x, y: 0, z: s.z, yaw: s.yaw, primary: p.primary });
+      if (!p.isBot) this.io.to(p.id).emit('spawn', { x: s.x, y: 0, z: s.z, yaw: s.yaw, primary: p.primary, optic: p.optic });
     }
     this.setPhase('freeze', MATCH.FREEZE_TIME);
   }
@@ -253,7 +301,7 @@ export class Room {
   backToLobby(message) {
     this.state = 'lobby';
     this.phase = null;
-    for (const p of this.players.values()) { p.ready = false; p.alive = false; }
+    for (const p of this.players.values()) { p.ready = !!p.isBot; p.alive = false; }
     this.io.to(this.code).emit('backToLobby', { message: message || null });
     this.sendLobby();
   }
@@ -315,6 +363,13 @@ export class Room {
     if (len < 0.5) return;
     const dir = { x: d.x / len, y: d.y / len, z: d.z / len };
 
+    this.fire(p, data.weapon, dir);
+  }
+
+  /** Tir validé (joueur ou bot) : munitions, cadence, trajectoire, dégâts */
+  fire(p, weaponId, dir) {
+    const w = WEAPONS[weaponId];
+    const data = { weapon: weaponId };
     const now = Date.now();
     // Cadence de tir (avec une petite tolérance réseau)
     if (now - p.lastShot < w.fireInterval * 1000 * 0.8) return;
@@ -331,7 +386,7 @@ export class Room {
 
     // Les autres joueurs voient le tir (traçante, son)
     const endDist = hit ? hit.dist : Math.min(wallDist, w.range);
-    this.io.to(this.code).emit('shot', { id, weapon: data.weapon, from: eye, dir, dist: endDist, hitWall: !hit && wallDist < w.range });
+    this.io.to(this.code).emit('shot', { id: p.id, weapon: data.weapon, from: eye, dir, dist: endDist, hitWall: !hit && wallDist < w.range });
 
     if (hit) this.damage(p, this.players.get(hit.id), hit.headshot ? w.headDamage : w.damage, hit.headshot, data.weapon);
   }
@@ -368,6 +423,11 @@ export class Room {
       }
     }
 
+    // Intelligence des bots
+    for (const p of this.players.values()) {
+      if (p.isBot && p.alive) p.brain.update(this, p, 1 / MATCH.TICK_RATE);
+    }
+
     // Changements de phase
     if (now >= this.phaseEnd) {
       if (this.phase === 'freeze') this.setPhase('live', MATCH.ROUND_TIME);
@@ -388,7 +448,7 @@ export class Room {
         id: p.id, name: p.name, team: p.team,
         x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3),
         yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
-        crouch: p.crouch, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary,
+        crouch: p.crouch, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
         mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd,
         kills: p.kills, deaths: p.deaths,
       })),
@@ -399,4 +459,10 @@ export class Room {
     clearInterval(this.tickTimer);
     this.onEmpty(this.code);
   }
+}
+
+/** Vérifie un loadout reçu : { primary, optic } (accepte aussi juste le nom de l'arme) */
+function sanitizeLoadout(data) {
+  const primary = PRIMARIES.includes(data?.primary) ? data.primary : PRIMARIES.includes(data) ? data : 'ak';
+  return { primary, optic: validOptic(primary, data?.optic) };
 }

@@ -50,8 +50,7 @@ export const WEAPONS = {
     airSpread: 0.1,        // en plus en l'air
     burstSpread: 0.0035,   // en plus à chaque balle tirée d'affilée
     recoilKick: 0.012,     // recul vertical par balle
-    adsZoom: 1.3,          // zoom en visant
-    adsSpeed: 8,           // vitesse de mise en joue
+    adsSpeed: 12,          // vitesse de mise en joue (plus grand = plus rapide)
   },
   kar98k: {
     name: 'Kar98k',
@@ -70,8 +69,7 @@ export const WEAPONS = {
     airSpread: 0.2,
     burstSpread: 0,
     recoilKick: 0.06,
-    adsZoom: 4,            // lunette x4
-    adsSpeed: 5,
+    adsSpeed: 13,          // mise en joue rapide
   },
   knife: {
     name: 'Couteau',
@@ -83,8 +81,34 @@ export const WEAPONS = {
   },
 };
 
-// Armes principales qu'on peut choisir (touche M)
+// Armes principales qu'on peut choisir dans les loadouts
 export const PRIMARIES = ['ak', 'kar98k'];
+
+// ---------------------------------------------------------------------
+//  Viseurs (accessoires). zoom = grossissement en visant.
+//  overlay = image plein écran en visée (lunettes) au lieu de l'arme.
+// ---------------------------------------------------------------------
+export const OPTICS = {
+  iron:   { name: 'Mire', desc: 'Les organes de visée de l\'arme', zoom: 1.35 },
+  reddot: { name: 'Point rouge', desc: 'Viseur rapide et dégagé', zoom: 1.45 },
+  mid:    { name: 'Lunette x2.5', desc: 'Moyenne distance', zoom: 2.5, overlay: 'mid' },
+  scope:  { name: 'Lunette sniper x4', desc: 'Longue distance', zoom: 4, overlay: 'scope' },
+};
+// Viseurs disponibles pour chaque arme (le premier = celui par défaut)
+export const WEAPON_OPTICS = {
+  ak: ['iron', 'reddot', 'mid'],
+  kar98k: ['iron', 'reddot', 'mid', 'scope'],
+};
+export function validOptic(weapon, optic) {
+  return WEAPON_OPTICS[weapon]?.includes(optic) ? optic : WEAPON_OPTICS[weapon]?.[0] || 'iron';
+}
+
+// Niveaux des bots
+export const BOT_LEVELS = {
+  easy:   { name: 'Débutant', reaction: 1.0, spread: 0.075, fireDelay: [0.35, 0.6], headChance: 0.05, speed: 3.6 },
+  medium: { name: 'Intermédiaire', reaction: 0.55, spread: 0.04, fireDelay: [0.18, 0.35], headChance: 0.15, speed: 4.5 },
+  hard:   { name: 'Fort', reaction: 0.28, spread: 0.018, fireDelay: [0.11, 0.2], headChance: 0.35, speed: 5.5 },
+};
 
 export const MATCH = {
   WIN_SCORE: 6,          // première équipe à 6 manches gagne

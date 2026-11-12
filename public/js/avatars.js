@@ -1,31 +1,31 @@
 // =====================================================================
 //  avatars.js — Personnages 3D des autres joueurs (et des bots)
-//  Soldat low-poly : casque, visière lumineuse, gilet, sac, bras qui
-//  tiennent l'arme. Contour fin à la couleur de l'équipe (violet / orange).
-//  Les skins (tenue + arme) sont appliqués.
+//  Soldat aux formes arrondies : casque, lunettes, gilet, sac, membres
+//  en capsules, mains avec doigts. Contour fin à la couleur de l'équipe.
 // =====================================================================
 import * as THREE from 'three';
 import { TEAMS, HITBOX } from '/shared/constants.js';
-import { mat, box, limb, cyl, addOutline, skinMaterials } from './models.js';
+import { mat, box, rbox, capsule, cyl, makeHand, orientHand, addOutline, skinMaterials } from './models.js';
 import { CHARACTER_SKINS, WEAPON_SKINS } from '/shared/skins.js';
 import { fabricTex } from './textures.js';
 
 const OUTLINE = 0.012; // épaisseur du contour (discret)
-
-const HIP = 0.92;             // hauteur des hanches (pivot des jambes)
-const SHOULDER = 1.38;        // hauteur des épaules (pivot des bras + arme)
-const NECK = 1.48;            // pivot de la tête
+const HIP = 0.92;      // hauteur des hanches (pivot des jambes)
+const SHOULDER = 1.4;  // hauteur des épaules (pivot des bras + arme)
+const NECK = 1.5;      // pivot de la tête
 
 export class Avatar {
   /**
    * opts.skins  = skins du joueur ({ character, ak, kar98k, knife })
-   * opts.weapon = arme tenue au départ
+   * opts.weapon = arme tenue, opts.optic = viseur monté dessus
+   * opts.outline = false pour ne pas dessiner de contour (aperçu du menu)
    */
   constructor(scene, name, team, opts = {}) {
     this.scene = scene;
     this.group = new THREE.Group();
     const color = TEAMS[team]?.color ?? 0x888888;
     this.color = color;
+    this.outline = opts.outline !== false;
     this.skins = opts.skins || {};
     const cs = CHARACTER_SKINS[this.skins.character] || CHARACTER_SKINS.default;
 
@@ -33,24 +33,26 @@ export class Avatar {
     const suit = mat(cs.suit, { map: fabricTex(), roughness: 0.95 });
     const vest = mat(cs.vest, { map: fabricTex(), roughness: 0.9 });
     const boots = mat(0x1d1a17, { roughness: 0.8 });
-    const glove = mat(0x26231f, { roughness: 0.85 });
-    const skin = mat(0xc49a76, { roughness: 0.75 });
-    const metal = mat(0x3a3f3a, { metalness: 0.3, roughness: 0.6, map: fabricTex() }); // casque peint mat
-    const glass = mat(0x111418, { metalness: 0.9, roughness: 0.1 });                   // verres des lunettes
-    // Brassard / bandes à la couleur de l'équipe (légèrement lumineux pour rester lisible)
+    const glove = mat(0x5d4f40, { roughness: 0.85 });
+    const skin = mat(0xc49a76, { roughness: 0.7 });
+    const helmet = mat(0x3a3f3a, { metalness: 0.25, roughness: 0.65, map: fabricTex() });
+    const strap = mat(0x1b1a18, { roughness: 0.85 });
+    const glass = mat(0x0f1216, { metalness: 0.9, roughness: 0.08 });
+    // Brassard / écusson à la couleur de l'équipe (un peu lumineux pour rester lisible)
     const glow = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.35, roughness: 0.6 });
+    this.mats = { glove, suit };
 
     // ---- Jambes (pivot aux hanches pour l'animation de marche) ----
-    this.legs = [-0.13, 0.13].map((x) => {
+    this.legs = [-0.12, 0.12].map((x) => {
       const leg = new THREE.Group();
       leg.position.set(x, HIP, 0);
       leg.add(
-        box(0.2, 0.44, 0.22, suit, 0, -0.22, 0),      // cuisse
-        box(0.17, 0.38, 0.19, suit, 0, -0.62, 0),     // tibia
-        box(0.21, 0.13, 0.08, vest, 0, -0.45, -0.1),  // genouillère
-        box(0.08, 0.14, 0.12, vest, x > 0 ? 0.12 : -0.12, -0.2, 0), // poche de cuisse
-        box(0.22, 0.13, 0.32, boots, 0, -0.855, -0.04), // botte
-        box(0.23, 0.035, 0.34, mat(0x0e0d0c), 0, -0.905, -0.04) // semelle
+        capsule([0, 0, 0], [0, -0.44, 0.01], 0.1, suit),             // cuisse
+        capsule([0, -0.44, 0.01], [0, -0.82, 0], 0.08, suit),        // tibia
+        rbox(0.17, 0.13, 0.08, vest, 0, -0.44, -0.09, 0.03),         // genouillère
+        rbox(0.07, 0.13, 0.12, vest, x > 0 ? 0.1 : -0.1, -0.22, 0, 0.025), // poche de cuisse
+        rbox(0.19, 0.13, 0.3, boots, 0, -0.855, -0.04, 0.05),        // botte
+        rbox(0.2, 0.035, 0.31, strap, 0, -0.905, -0.04, 0.012),      // semelle
       );
       this.group.add(leg);
       return leg;
@@ -59,34 +61,32 @@ export class Avatar {
     // ---- Haut du corps (descend quand on s'accroupit) ----
     this.body = new THREE.Group();
     this.body.add(
-      box(0.44, 0.16, 0.26, vest, 0, 0.99, 0),          // bassin / ceinture
-      box(0.5, 0.48, 0.28, suit, 0, 1.22, 0),           // torse
-      box(0.56, 0.36, 0.34, vest, 0, 1.25, 0),          // gilet pare-balles
-      box(0.46, 0.06, 0.28, mat(0x1b1a18), 0, 1.05, 0), // ceinture
-      box(0.09, 0.12, 0.06, vest, -0.12, 1.2, -0.19),   // poches à chargeurs
-      box(0.09, 0.12, 0.06, vest, 0, 1.2, -0.19),
-      box(0.09, 0.12, 0.06, vest, 0.12, 1.2, -0.19),
-      box(0.14, 0.05, 0.02, glow, 0.12, 1.36, -0.175),  // écusson de l'équipe sur le torse
-      box(0.32, 0.36, 0.14, vest, 0, 1.25, 0.23),       // sac à dos
-      box(0.26, 0.08, 0.1, suit, 0, 1.4, 0.25),         // rabat du sac
-      box(0.16, 0.1, 0.22, vest, 0.34, 1.42, 0),        // épaulière droite
-      box(0.16, 0.1, 0.22, vest, -0.34, 1.42, 0),       // épaulière gauche
-      box(0.165, 0.07, 0.225, glow, -0.34, 1.33, 0),    // brassard d'équipe (bras gauche)
-      box(0.165, 0.07, 0.225, glow, 0.34, 1.33, 0),     // brassard d'équipe (bras droit)
+      rbox(0.42, 0.18, 0.26, suit, 0, 1.0, 0, 0.07),                 // bassin
+      rbox(0.44, 0.07, 0.28, strap, 0, 1.06, 0, 0.025),              // ceinture
+      rbox(0.48, 0.46, 0.28, suit, 0, 1.24, 0, 0.11),                // torse
+      rbox(0.52, 0.36, 0.33, vest, 0, 1.24, 0, 0.08),                // gilet pare-balles
+      rbox(0.08, 0.11, 0.06, vest, -0.12, 1.19, -0.18, 0.02),        // poches à chargeurs
+      rbox(0.08, 0.11, 0.06, vest, 0, 1.19, -0.18, 0.02),
+      rbox(0.08, 0.11, 0.06, vest, 0.12, 1.19, -0.18, 0.02),
+      rbox(0.12, 0.045, 0.02, glow, 0.12, 1.36, -0.168, 0.008),     // écusson d'équipe
+      rbox(0.32, 0.36, 0.15, vest, 0, 1.26, 0.23, 0.06),             // sac à dos
+      rbox(0.26, 0.09, 0.1, suit, 0, 1.42, 0.25, 0.04),              // rabat du sac
+      rbox(0.17, 0.12, 0.2, vest, 0.31, 1.42, 0, 0.05),              // épaulières
+      rbox(0.17, 0.12, 0.2, vest, -0.31, 1.42, 0, 0.05),
     );
 
     // Tête (pivot au cou pour regarder en haut / en bas)
     this.headG = new THREE.Group();
     this.headG.position.y = NECK;
     this.headG.add(
-      box(0.12, 0.08, 0.12, skin, 0, 0.02, 0),          // cou
-      box(0.26, 0.28, 0.26, skin, 0, 0.16, 0),          // visage
-      box(0.2, 0.09, 0.03, mat(0x2a2622), 0, 0.06, -0.13), // cache-cou
-      box(0.33, 0.15, 0.33, metal, 0, 0.31, 0.01),      // casque
-      box(0.35, 0.05, 0.14, metal, 0, 0.23, 0.13),      // rebord arrière du casque
-      box(0.27, 0.025, 0.04, metal, 0, 0.235, -0.15),   // visière du casque
-      box(0.24, 0.065, 0.035, glass, 0, 0.17, -0.14),   // lunettes de protection
-      box(0.28, 0.025, 0.28, mat(0x1b1a18), 0, 0.17, 0.005), // sangle des lunettes
+      capsule([0, -0.04, 0], [0, 0.07, 0], 0.06, skin),             // cou
+      rbox(0.24, 0.27, 0.25, skin, 0, 0.17, 0, 0.09),               // visage
+      rbox(0.13, 0.05, 0.035, mat(0x2a2622), 0, 0.075, -0.115, 0.015), // cache-cou
+      rbox(0.31, 0.17, 0.31, helmet, 0, 0.3, 0.01, 0.1),            // casque
+      rbox(0.33, 0.06, 0.15, helmet, 0, 0.24, 0.11, 0.025),         // bord arrière du casque
+      rbox(0.24, 0.07, 0.04, glass, 0, 0.18, -0.125, 0.025),        // lunettes de protection
+      rbox(0.27, 0.025, 0.27, strap, 0, 0.18, 0.005, 0.012),        // sangle
+      rbox(0.04, 0.05, 0.03, strap, 0.13, 0.26, -0.02, 0.01),       // fixation de lampe
     );
     this.body.add(this.headG);
 
@@ -96,14 +96,23 @@ export class Avatar {
     const s = (x, y, z) => [x, y - SHOULDER, z]; // coordonnées relatives à l'épaule
     this.aim.add(
       // Bras droit : épaule → coude → main sur la poignée
-      limb(s(0.3, 1.4, 0), s(0.3, 1.13, -0.16), 0.13, suit),
-      limb(s(0.3, 1.13, -0.16), s(0.15, 1.1, -0.34), 0.11, suit),
-      box(0.09, 0.09, 0.09, glove, 0.15, 1.1 - SHOULDER, -0.36),
+      capsule(s(0.3, 1.41, 0), s(0.3, 1.15, -0.15), 0.065, suit),
+      capsule(s(0.3, 1.15, -0.15), s(0.16, 1.11, -0.33), 0.055, suit),
       // Bras gauche : épaule → coude → main sur le garde-main
-      limb(s(-0.3, 1.4, 0), s(-0.2, 1.12, -0.3), 0.13, suit),
-      limb(s(-0.2, 1.12, -0.3), s(0.1, 1.15, -0.62), 0.11, suit),
-      box(0.09, 0.09, 0.09, glove, 0.11, 1.15 - SHOULDER, -0.63),
+      capsule(s(-0.3, 1.41, 0), s(-0.21, 1.13, -0.3), 0.065, suit),
+      capsule(s(-0.21, 1.13, -0.3), s(0.08, 1.15, -0.6), 0.055, suit),
+      rbox(0.07, 0.04, 0.18, glow, -0.3, 1.33 - SHOULDER, -0.03, 0.02), // brassard (bras gauche)
     );
+    // Mains avec doigts
+    const rh = makeHand(glove, { curl: [-1.3, -1.2] });
+    rh.scale.setScalar(1.3); rh.scale.x = -1.3;
+    orientHand(rh, [0, -1, 0], [1, 0, 0], [0, 0, 1]);
+    rh.position.set(0.17, 1.12 - SHOULDER, -0.34);
+    const lh = makeHand(glove, { curl: [-1.2, -1.0] });
+    lh.scale.setScalar(1.3);
+    orientHand(lh, [0, 0, -1], [0, -1, 0], [-1, 0, 0]);
+    lh.position.set(0.1, 1.13 - SHOULDER, -0.62);
+    this.aim.add(rh, lh);
     // L'arme tenue (reconstruite quand le joueur change d'arme)
     this.gunG = new THREE.Group();
     this.gunG.position.set(0.13, 1.18 - SHOULDER, 0);
@@ -114,14 +123,16 @@ export class Avatar {
     this.group.traverse(o => { if (o.isMesh) o.castShadow = true; });
 
     // Contour fin à la couleur de l'équipe
-    addOutline(this.group, color, OUTLINE);
+    if (this.outline) addOutline(this.group, color, OUTLINE);
     this.weaponId = null;
-    this.setWeapon(opts.weapon || 'ak');
+    this.setWeapon(opts.weapon || 'ak', opts.optic);
 
     // Pseudo flottant
-    this.label = makeLabel(name, TEAMS[team]?.css ?? '#fff');
-    this.label.position.y = 2.2;
-    this.group.add(this.label);
+    if (name) {
+      this.label = makeLabel(name, TEAMS[team]?.css ?? '#fff');
+      this.label.position.y = 2.2;
+      this.group.add(this.label);
+    }
 
     scene.add(this.group);
 
@@ -139,15 +150,16 @@ export class Avatar {
 
   setVisible(v) { this.group.visible = v; }
 
-  /** Change l'arme visible dans les mains ('ak', 'kar98k' ou 'knife') */
-  setWeapon(id) {
-    if (id === this.weaponId) return;
-    this.weaponId = id;
-    for (const c of [...this.gunG.children]) { this.gunG.remove(c); c.traverse(o => { if (!o.userData.isOutline) o.geometry?.dispose(); }); }
+  /** Change l'arme visible dans les mains ('ak', 'kar98k' ou 'knife') + son viseur */
+  setWeapon(id, optic = 'iron') {
+    const key = `${id}:${optic}`;
+    if (key === this.weaponId) return;
+    this.weaponId = key;
+    for (const c of [...this.gunG.children]) this.gunG.remove(c);
     const skin = WEAPON_SKINS[this.skins[id]] || WEAPON_SKINS.default;
-    const g = buildThirdPersonWeapon(id, skin);
+    const g = buildThirdPersonWeapon(id, skin, optic);
     g.traverse(o => { if (o.isMesh) o.castShadow = true; });
-    addOutline(g, this.color, OUTLINE);
+    if (this.outline) addOutline(g, this.color, OUTLINE);
     this.gunG.add(g);
   }
 
@@ -175,21 +187,19 @@ export class Avatar {
       l.position.y = HIP * l.scale.y;
     }
 
-    // Animation de marche (balancement des jambes)
+    // Animation de marche (balancement des jambes) + respiration
     const speed = prev.distanceTo(g.position) / Math.max(dt, 1e-4);
     if (speed > 0.5) this.walk += dt * speed * 1.8;
     const swing = Math.sin(this.walk) * Math.min(speed / 6, 1) * 0.6;
     this.legs[0].rotation.x = swing; this.legs[1].rotation.x = -swing;
     this.body.rotation.z = Math.sin(this.walk) * 0.03 * Math.min(speed / 6, 1);
+    this.body.scale.y = 1 + Math.sin(performance.now() / 700) * 0.006;
   }
 
   dispose() {
     this.scene.remove(this.group);
-    this.group.traverse(o => {
-      if (o.userData.isOutline) return; // la géométrie est partagée avec la pièce d'origine
-      o.geometry?.dispose();
-      if (o.material?.map) o.material.map.dispose();
-    });
+    // Les géométries sont partagées entre personnages : on ne libère que la texture du pseudo
+    this.label?.material.map?.dispose();
   }
 }
 
@@ -211,16 +221,18 @@ function makeLabel(text, color) {
 //  Armes vues par les autres joueurs (version simplifiée)
 //  Repère : z négatif = vers l'avant
 // ---------------------------------------------------------------------
-function buildThirdPersonWeapon(id, skin) {
+function buildThirdPersonWeapon(id, skin, optic) {
   const g = new THREE.Group();
   const { body, accent, dark } = skinMaterials(skin);
+  const opticMat = mat(0x16181c, { metalness: 0.5 });
   if (id === 'knife') {
     g.add(box(0.03, 0.04, 0.12, accent, 0.02, -0.08, -0.36), box(0.01, 0.05, 0.22, mat(0xd8dee9, { metalness: 0.8 }), 0.02, -0.07, -0.52));
-  } else if (id === 'kar98k') {
+    return g;
+  }
+  if (id === 'kar98k') {
     g.add(
       box(0.06, 0.08, 0.95, accent, 0, -0.02, -0.4),   // bois sur toute la longueur
       cyl(0.02, 0.4, body, 0, 0.02, -1.0),             // canon
-      cyl(0.03, 0.3, dark, 0, 0.1, -0.42),             // lunette
       box(0.06, 0.12, 0.25, accent, 0, -0.06, 0.02),   // crosse
     );
   } else {
@@ -232,5 +244,9 @@ function buildThirdPersonWeapon(id, skin) {
       mag,
     );
   }
+  // Viseur monté
+  if (optic === 'reddot') g.add(box(0.05, 0.06, 0.07, opticMat, 0, 0.1, -0.4));
+  if (optic === 'mid') g.add(cyl(0.025, 0.18, opticMat, 0, 0.11, -0.42));
+  if (optic === 'scope') g.add(cyl(0.03, 0.3, opticMat, 0, 0.1, -0.42));
   return g;
 }

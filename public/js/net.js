@@ -8,7 +8,7 @@ import { MAP_BOXES } from '/shared/map.js';
 import { raycastWorld, traceShot } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
 import { sfx } from './audio.js';
-import { settings } from './settings.js';
+import { settings, saveSettings, activeLoadout } from './settings.js';
 
 export class NetGame {
   /**
@@ -36,7 +36,7 @@ export class NetGame {
     s.on('state', (st) => this.onState(st));
     s.on('correct', (p) => Object.assign(ctx.player.pos, p));
     s.on('loadout', (e) => {
-      if (e.applied) { ctx.weapons.reset(e.primary); ctx.weapons.setVisible(true); }
+      if (e.applied) { ctx.weapons.reset(e); ctx.weapons.setVisible(true); }
       ctx.hud.info(e.applied ? `Arme : ${WEAPONS[e.primary].name}` : `${WEAPONS[e.primary].name} à la prochaine manche`);
     });
     s.on('shot', (e) => this.onShot(e));
@@ -52,8 +52,10 @@ export class NetGame {
   get myTeam() { return this.lobby?.players.find(p => p.id === this.myId)?.team; }
 
   // ---------------- Lobby ----------------
-  create(name) { return new Promise(r => this.socket.emit('createRoom', { name, skins: settings.skins, primary: settings.primary }, r)); }
-  join(code, name) { return new Promise(r => this.socket.emit('joinRoom', { code, name, skins: settings.skins, primary: settings.primary }, r)); }
+  create(name) { return new Promise(r => this.socket.emit('createRoom', { name, skins: settings.skins, loadout: activeLoadout() }, r)); }
+  join(code, name) { return new Promise(r => this.socket.emit('joinRoom', { code, name, skins: settings.skins, loadout: activeLoadout() }, r)); }
+  addBot(team, level) { this.socket.emit('addBot', { team, level }); }
+  removeBot(id) { this.socket.emit('removeBot', id); }
   setSkins(skins) { this.socket.emit('setSkins', skins); }
   setMode(m) { this.socket.emit('setMode', m); }
   setTeam(t) { this.socket.emit('setTeam', t); }
@@ -73,7 +75,7 @@ export class NetGame {
   onSpawn(sp) {
     const { player, weapons } = this.ctx;
     player.spawn(sp);
-    weapons.reset(sp.primary || 'ak');
+    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic });
     weapons.setVisible(true);
     this.spectating = null;
   }
@@ -106,10 +108,10 @@ export class NetGame {
       let av = this.avatars.get(p.id);
       if (!av) {
         const lp = this.lobby?.players.find(l => l.id === p.id);
-        av = new Avatar(this.ctx.scene, p.name, p.team, { skins: lp?.skins, weapon: p.weapon });
+        av = new Avatar(this.ctx.scene, p.name, p.team, { skins: lp?.skins, weapon: p.weapon, optic: p.optic });
         this.avatars.set(p.id, av); av.setTarget(p, true);
       }
-      av.setWeapon(p.weapon);
+      av.setWeapon(p.weapon, p.weapon === p.primary ? p.optic : 'iron');
       av.setTarget(p, av.wasDead && p.alive); // téléportation au respawn
       av.wasDead = !p.alive;
       av.alive = p.alive;
@@ -170,7 +172,9 @@ export class NetGame {
   canMove() { return this.inMatch && this.ctx.player.alive && this.phase !== 'freeze'; }
   canFire() { return this.inMatch && this.ctx.player.alive && this.phase === 'live'; }
   reload() { this.socket.emit('reload'); }
-  setLoadout(w) { settings.primary = w; this.socket.emit('setLoadout', w); return false; }
+  /** Choix du loadout (index 0..4) : envoyé au serveur qui l'applique au bon moment */
+  setLoadout(index) { settings.activeLoadout = index; saveSettings(); this.socket.emit('setLoadout', activeLoadout()); return false; }
+  sendLoadout() { this.socket.emit('setLoadout', activeLoadout()); }
   switchWeapon(w) { this.socket.emit('switch', w); }
 
   fire(origin, dir, weapon) {

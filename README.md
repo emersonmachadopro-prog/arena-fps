@@ -131,8 +131,9 @@ Render redéploie automatiquement en 2-3 minutes.
 | Sauter | Espace (pendant une glissade = saut avec l'élan) |
 | S'accroupir | C |
 | Recharger | R |
+| Inspecter l'arme | Y |
 | Arme principale / Couteau | 1 / 2 ou molette |
-| Choisir son arme (AK-47 ou Kar98k) | M — en jeu, même mort en attendant de réapparaître |
+| Choisir son loadout | M — en jeu, même mort en attendant de réapparaître |
 | Tableau des scores | Tab |
 | Pause / libérer la souris | Échap |
 
@@ -145,8 +146,15 @@ Le Kar98k dans la lunette est parfaitement précis si tu ne bouges pas.
 Si ton navigateur ne le permet pas, il te demande au moins une confirmation avant de fermer l'onglet.
 Option désactivable dans ⚙ Paramètres.
 
-**Casier :** skins d'armes (AK-47, Kar98k, couteau) et de tenue, depuis le menu principal ou le lobby.
+**Menu :** onglets **Jouer** (créer / rejoindre une partie, entraînement), **Personnage** (skins de tenue et d'armes),
+**Inventaire** (5 loadouts : arme principale + viseur, celui marqué « Équipé » est utilisé en jeu).
 Pour ajouter un skin : `shared/skins.js` (une ligne = un skin).
+
+**Viseurs :** mire (de base), point rouge, lunette x2.5, lunette sniper x4 (Kar98k uniquement).
+
+**Bots en multijoueur :** dans le salon, l'hôte peut compléter une place libre avec un bot
+(Débutant, Intermédiaire ou Fort). Si un vrai joueur rejoint et que le salon est plein, un bot lui laisse sa place.
+Réglages des bots : `BOT_LEVELS` dans `shared/constants.js`.
 
 ---
 
@@ -157,7 +165,8 @@ arena-fps/
 ├── package.json          ← dépendances + commande "npm start"
 ├── server/
 │   ├── index.js          ← serveur web + Socket.io, création des salons
-│   └── Room.js           ← logique d'une partie (lobby, manches, PV, score)
+│   ├── Room.js           ← logique d'une partie (lobby, manches, PV, score)
+│   └── Bot.js            ← intelligence des bots en multijoueur
 ├── shared/               ← code utilisé PAR LE CLIENT ET LE SERVEUR
 │   ├── constants.js      ← ⚖️ équilibrage : dégâts, vitesse, manches…
 │   ├── map.js            ← la map (liste de boîtes) + spawns
@@ -179,7 +188,8 @@ arena-fps/
         ├── audio.js      ← sons générés par code
         ├── settings.js   ← paramètres sauvegardés
         ├── input.js      ← clavier / souris
-        ├── ui.js         ← menus (lobby, paramètres, fin)
+        ├── ui.js         ← menus (onglets, inventaire, lobby, paramètres, fin)
+        ├── showcase.js   ← personnages affichés en 3D dans les menus
         ├── solo.js       ← mode entraînement avec bots
         └── net.js        ← mode multijoueur (client Socket.io)
 ```

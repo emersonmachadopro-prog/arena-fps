@@ -65,20 +65,20 @@ io.on('connection', (socket) => {
     if (room) { socket.leave(room.code); room.removePlayer(socket.id); room = null; }
   };
 
-  socket.on('createRoom', ({ name, skins, primary } = {}, reply) => {
+  socket.on('createRoom', ({ name, skins, loadout } = {}, reply) => {
     leave();
     const code = makeCode();
     room = new Room(code, io, (c) => rooms.delete(c));
     rooms.set(code, room);
-    room.addPlayer(socket, name, skins, primary);
+    room.addPlayer(socket, name, skins, loadout);
     reply?.({ ok: true, code });
   });
 
-  socket.on('joinRoom', ({ code, name, skins, primary } = {}, reply) => {
+  socket.on('joinRoom', ({ code, name, skins, loadout } = {}, reply) => {
     leave();
     const r = rooms.get(String(code || '').toUpperCase().trim());
     if (!r) return reply?.({ ok: false, error: 'Salon introuvable. Vérifie le code.' });
-    const err = r.addPlayer(socket, name, skins, primary);
+    const err = r.addPlayer(socket, name, skins, loadout);
     if (err) return reply?.({ ok: false, error: err });
     room = r;
     reply?.({ ok: true, code: r.code });
@@ -92,7 +92,9 @@ io.on('connection', (socket) => {
   socket.on('setTeam', (team) => room?.setTeam(socket.id, team));
   socket.on('setReady', (ready) => room?.setReady(socket.id, ready));
   socket.on('setSkins', (skins) => room?.setSkins(socket.id, skins));
-  socket.on('setLoadout', (w) => room?.setLoadout(socket.id, w));
+  socket.on('setLoadout', (lo) => room?.setLoadout(socket.id, lo));
+  socket.on('addBot', ({ team, level } = {}) => room?.addBot(socket.id, team, level));
+  socket.on('removeBot', (botId) => room?.removeBot(socket.id, botId));
   socket.on('playAgain', () => { if (room && room.state === 'ended') room.backToLobby(); });
 
   // En jeu

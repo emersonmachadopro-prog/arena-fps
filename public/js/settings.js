@@ -14,15 +14,28 @@ export const ACTIONS = [
   ['jump', 'Sauter', 'Space'],
   ['crouch', "S'accroupir / glisser en courant", 'KeyC'],
   ['reload', 'Recharger', 'KeyR'],
+  ['inspect', "Inspecter l'arme", 'KeyY'],
   ['weapon1', 'Arme principale', 'Digit1'],
   ['weapon2', 'Couteau', 'Digit2'],
-  ['loadout', "Choisir son arme (prochaine apparition)", 'KeyM'],
+  ['loadout', 'Choisir son loadout (prochaine apparition)', 'KeyM'],
   ['scoreboard', 'Tableau des scores', 'Tab'],
 ];
 
 import { DEFAULT_SKINS } from '/shared/skins.js';
+import { PRIMARIES, validOptic } from '/shared/constants.js';
 
 const STORAGE_KEY = 'arenastrike.settings.v2';
+
+export const LOADOUT_COUNT = 5;
+function defaultLoadouts() {
+  return [
+    { name: 'Assaut', primary: 'ak', optic: 'iron' },
+    { name: 'Sniper', primary: 'kar98k', optic: 'scope' },
+    { name: 'Assaut point rouge', primary: 'ak', optic: 'reddot' },
+    { name: 'Tireur à la mire', primary: 'kar98k', optic: 'iron' },
+    { name: 'Polyvalent', primary: 'ak', optic: 'mid' },
+  ];
+}
 
 function defaults() {
   return {
@@ -32,8 +45,10 @@ function defaults() {
     volume: 0.6,
     invertY: false,
     fullscreen: true,      // plein écran en jeu (bloque Ctrl+W sur Chrome/Edge)
-    primary: 'ak',         // arme principale choisie
     skins: { ...DEFAULT_SKINS },
+    // 5 loadouts personnalisables (Inventaire) + celui qui est équipé
+    loadouts: defaultLoadouts(),
+    activeLoadout: 0,
     keys: Object.fromEntries(ACTIONS.map(([id, , key]) => [id, key])),
   };
 }
@@ -46,8 +61,22 @@ function load() {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
     Object.assign(s, saved, { keys: { ...s.keys, ...(saved.keys || {}) }, skins: { ...s.skins, ...(saved.skins || {}) } });
   } catch { /* stockage indisponible : on garde les valeurs par défaut */ }
+  // Vérifie les loadouts (au cas où le fichier sauvegardé est ancien ou abîmé)
+  const def = defaultLoadouts();
+  s.loadouts = Array.from({ length: LOADOUT_COUNT }, (_, i) => {
+    const l = { ...def[i], ...(s.loadouts?.[i] || {}) };
+    if (!PRIMARIES.includes(l.primary)) l.primary = def[i].primary;
+    l.optic = validOptic(l.primary, l.optic);
+    l.name = String(l.name || def[i].name).slice(0, 24);
+    return l;
+  });
+  if (!(s.activeLoadout >= 0 && s.activeLoadout < LOADOUT_COUNT)) s.activeLoadout = 0;
+  delete s.primary;
   return s;
 }
+
+/** Le loadout actuellement équipé : { name, primary, optic } */
+export function activeLoadout() { return settings.loadouts[settings.activeLoadout]; }
 
 const listeners = [];
 /** Appelé à chaque modification (ex : pour changer le FOV en direct). */

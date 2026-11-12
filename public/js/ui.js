@@ -2,14 +2,14 @@
 //  ui.js — Menus HTML : navigation entre écrans, paramètres, lobby,
 //  casier (skins), choix d'arme, écran de fin.
 // =====================================================================
-import { ACTIONS, settings, saveSettings, resetSettings, keyLabel } from './settings.js';
-import { TEAMS, WEAPONS, PRIMARIES } from '/shared/constants.js';
+import { ACTIONS, settings, saveSettings, resetSettings, keyLabel, activeLoadout } from './settings.js';
+import { TEAMS, WEAPONS, PRIMARIES, OPTICS, WEAPON_OPTICS, BOT_LEVELS, validOptic } from '/shared/constants.js';
 import { WEAPON_SKINS, CHARACTER_SKINS } from '/shared/skins.js';
 import { escapeHtml } from './hud.js';
 import { sfx } from './audio.js';
 
 export const $ = (id) => document.getElementById(id);
-const SCREENS = ['menu-main', 'menu-lobby', 'menu-pause', 'menu-settings', 'menu-end', 'menu-click', 'menu-locker', 'menu-loadout'];
+const SCREENS = ['menu-main', 'menu-lobby', 'menu-lobby-skins', 'menu-pause', 'menu-settings', 'menu-end', 'menu-click', 'menu-loadout'];
 
 /** Affiche un écran (ou aucun avec null) */
 export function showScreen(id) {
@@ -34,7 +34,7 @@ const shade = (n, k) => {
 // ---------------------------------------------------------------------
 //  Petits dessins SVG (aperçus des armes et des tenues)
 // ---------------------------------------------------------------------
-export function weaponSVG(id, skinId = 'default') {
+export function weaponSVG(id, skinId = 'default', optic = null) {
   const s = WEAPON_SKINS[skinId] || WEAPON_SKINS.default;
   const body = hex(s.body), acc = hex(s.accent), dark = shade(s.body, 0.6);
   const glow = s.glow ? `filter="url(#g)"` : '';
@@ -47,16 +47,23 @@ export function weaponSVG(id, skinId = 'default') {
     return `<svg viewBox="0 0 200 60">${defs}
       <path d="M6 30 L40 26 L48 33 L150 32 L150 38 L50 40 L36 44 L6 44 Z" fill="${acc}" ${glow}/>
       <rect x="40" y="27" width="40" height="6" fill="${body}"/><rect x="148" y="30" width="48" height="3" fill="${body}"/>
-      <rect x="52" y="14" width="44" height="7" rx="3" fill="#15171c"/><rect x="92" y="12" width="10" height="11" rx="3" fill="#15171c"/>
-      <rect x="62" y="21" width="4" height="7" fill="${dark}"/><rect x="84" y="21" width="4" height="7" fill="${dark}"/>
-      <rect x="74" y="31" width="10" height="3" fill="${dark}"/></svg>`;
+      ${opticSVG(optic, 60, 27)}<rect x="74" y="31" width="10" height="3" fill="${dark}"/></svg>`;
   }
   return `<svg viewBox="0 0 200 60">${defs}
     <path d="M8 30 L46 26 L50 38 L20 46 L8 44 Z" fill="${acc}" ${glow}/>
     <rect x="46" y="24" width="56" height="12" rx="2" fill="${body}"/>
     <rect x="100" y="25" width="34" height="9" rx="2" fill="${acc}" ${glow}/>
     <rect x="132" y="27" width="50" height="4" fill="${body}"/><rect x="180" y="25" width="8" height="7" fill="${dark}"/>
-    <path d="M78 36 L92 36 L98 56 L86 58 Z" fill="${dark}"/><path d="M58 36 L66 36 L62 50 L54 50 Z" fill="${acc}"/></svg>`;
+    <path d="M78 36 L92 36 L98 56 L86 58 Z" fill="${dark}"/><path d="M58 36 L66 36 L62 50 L54 50 Z" fill="${acc}"/>${opticSVG(optic, 62, 24)}</svg>`;
+}
+
+/** Petit dessin du viseur posé sur l'arme (x = position, y = hauteur du rail) */
+export function opticSVG(optic, x, y) {
+  const c = '#15171c';
+  if (optic === 'reddot') return `<rect x="${x}" y="${y - 4}" width="16" height="4" fill="${c}"/><path d="M${x + 2} ${y - 4} v-9 h12 v9" fill="none" stroke="${c}" stroke-width="3"/><circle cx="${x + 8}" cy="${y - 9}" r="1.6" fill="#ff3b3b"/>`;
+  if (optic === 'mid') return `<rect x="${x - 2}" y="${y - 5}" width="20" height="5" fill="${c}"/><rect x="${x - 6}" y="${y - 13}" width="30" height="8" rx="3" fill="${c}"/><rect x="${x - 10}" y="${y - 15}" width="6" height="12" rx="2" fill="${c}"/>`;
+  if (optic === 'scope') return `<rect x="${x - 8}" y="${y - 14}" width="44" height="7" rx="3" fill="${c}"/><rect x="${x + 32}" y="${y - 16}" width="10" height="11" rx="3" fill="${c}"/><rect x="${x}" y="${y - 7}" width="4" height="7" fill="${c}"/><rect x="${x + 22}" y="${y - 7}" width="4" height="7" fill="${c}"/>`;
+  return '';
 }
 
 export function characterSVG(skinId = 'default') {
@@ -72,22 +79,108 @@ export function characterSVG(skinId = 'default') {
 }
 
 // ---------------------------------------------------------------------
-//  Cartes d'armes (casier + menu M)
+//  Onglets du menu principal
+// ---------------------------------------------------------------------
+export function initTabs(onChange) {
+  document.querySelectorAll('.topnav .tab[data-tab]').forEach(b => {
+    b.onclick = () => { sfx.click(); showTab(b.dataset.tab); onChange?.(b.dataset.tab); };
+  });
+}
+export function showTab(tab) {
+  document.querySelectorAll('.topnav .tab[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+  for (const t of ['play', 'skins', 'inventory']) $(`tab-${t}`).classList.toggle('hidden', t !== tab);
+}
+
+// ---------------------------------------------------------------------
+//  Skins (onglet Personnage + écran Skins du lobby)
+// ---------------------------------------------------------------------
+/** Construit une grille de skins avec ses onglets. onChange() à chaque changement. */
+export function initSkinGrid(tabsEl, gridEl, onChange) {
+  let cat = 'character';
+  tabsEl.querySelectorAll('button').forEach(b => { b.onclick = () => { cat = b.dataset.tab; render(); }; });
+  function render() {
+    tabsEl.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.tab === cat));
+    gridEl.innerHTML = '';
+    const list = cat === 'character' ? CHARACTER_SKINS : WEAPON_SKINS;
+    for (const [id, skin] of Object.entries(list)) {
+      const tile = document.createElement('div');
+      tile.className = 'skin-tile' + (settings.skins[cat] === id ? ' selected' : '');
+      tile.innerHTML = (cat === 'character' ? characterSVG(id) : weaponSVG(cat, id)) + `<div class="sname">${skin.name}</div>`;
+      tile.onclick = () => { settings.skins[cat] = id; saveSettings(); sfx.click(); render(); onChange(cat); };
+      gridEl.appendChild(tile);
+    }
+  }
+  return render;
+}
+
+// ---------------------------------------------------------------------
+//  Inventaire : 5 loadouts (arme + viseur), un seul équipé
+// ---------------------------------------------------------------------
+let editing = null; // index du loadout affiché dans l'éditeur
+
+/** onChange() est appelé quand un loadout est modifié ou équipé */
+export function initInventory(onChange) {
+  function render() {
+    if (editing === null) editing = settings.activeLoadout;
+    // Liste des 5 emplacements
+    const list = $('loadout-list');
+    list.innerHTML = '';
+    settings.loadouts.forEach((l, i) => {
+      const b = document.createElement('button');
+      b.className = 'lslot' + (i === editing ? ' selected' : '');
+      b.innerHTML = `<span class="num">${i + 1}</span><span>${escapeHtml(l.name)}<span class="lsub">${WEAPONS[l.primary].name} · ${OPTICS[l.optic].name}</span></span>
+        ${i === settings.activeLoadout ? '<span class="on">ÉQUIPÉ</span>' : ''}`;
+      b.onclick = () => { editing = i; sfx.click(); render(); };
+      list.appendChild(b);
+    });
+
+    // Éditeur du loadout sélectionné
+    const l = settings.loadouts[editing];
+    const ed = $('loadout-editor');
+    ed.innerHTML = `<div class="card-title">Loadout ${editing + 1}</div>
+      <input class="editor-name" id="lo-name" maxlength="24" value="${escapeHtml(l.name)}" />
+      <h3>Arme principale</h3><div class="weapon-cards" id="lo-weapons"></div>
+      <h3>Viseur (${WEAPONS[l.primary].name})</h3><div class="optic-grid" id="lo-optics"></div>
+      <h3>Équipement</h3><p class="hint">🔪 Couteau inclus · 💣 Grenades : bientôt !</p>
+      <div class="row"><button class="big ${editing === settings.activeLoadout ? '' : 'primary'}" id="lo-equip" ${editing === settings.activeLoadout ? 'disabled' : ''}>
+        ${editing === settings.activeLoadout ? '✔ Équipé' : 'Équiper ce loadout'}</button></div>`;
+    $('lo-name').oninput = (e) => { l.name = e.target.value.slice(0, 24) || `Loadout ${editing + 1}`; saveSettings(); renderListOnly(); };
+    renderWeaponCards($('lo-weapons'), l.primary, (id) => {
+      l.primary = id; l.optic = validOptic(id, l.optic); saveSettings(); render(); onChange();
+    }, l.optic);
+    const og = $('lo-optics');
+    for (const o of WEAPON_OPTICS[l.primary]) {
+      const b = document.createElement('button');
+      b.className = 'ocard' + (o === l.optic ? ' selected' : '');
+      b.innerHTML = `<svg viewBox="40 0 60 30">${opticSVG(o, 62, 26) || '<text x="70" y="22" fill="#8d94a8" font-size="10" text-anchor="middle">mire</text>'}</svg><b>${OPTICS[o].name}</b><small>${OPTICS[o].desc} · x${OPTICS[o].zoom}</small>`;
+      b.onclick = () => { l.optic = o; saveSettings(); sfx.click(); render(); onChange(); };
+      og.appendChild(b);
+    }
+    $('lo-equip').onclick = () => { settings.activeLoadout = editing; saveSettings(); sfx.click(); render(); onChange(); };
+  }
+  function renderListOnly() {
+    const items = $('loadout-list').children;
+    settings.loadouts.forEach((l, i) => { items[i].querySelector('span:nth-child(2)').firstChild.textContent = l.name; });
+  }
+  return render;
+}
+
+// ---------------------------------------------------------------------
+//  Cartes d'armes
 // ---------------------------------------------------------------------
 const WEAPON_INFO = {
   ak: { desc: 'Fusil d\'assaut automatique. Polyvalent, efficace à moyenne distance.', stats: { Dégâts: 35, Cadence: 90, Précision: 60, Portée: 65, Mobilité: 75 } },
-  kar98k: { desc: 'Fusil de précision à verrou, lunette x4. Un tir à la tête = un kill.', stats: { Dégâts: 95, Cadence: 15, Précision: 98, Portée: 100, Mobilité: 50 } },
+  kar98k: { desc: 'Fusil à verrou. Un tir à la tête = un kill. Mire de base, lunette en option.', stats: { Dégâts: 95, Cadence: 15, Précision: 98, Portée: 100, Mobilité: 50 } },
 };
 
-/** Remplit un conteneur avec les cartes des armes principales. onPick(id) au clic. */
-export function renderWeaponCards(container, selected, onPick) {
+export function renderWeaponCards(container, selected, onPick, optic = null) {
   container.innerHTML = '';
   for (const id of PRIMARIES) {
     const info = WEAPON_INFO[id];
     const card = document.createElement('button');
     card.className = 'wcard' + (id === selected ? ' selected' : '');
-    card.innerHTML = `<div class="wname">${WEAPONS[id].name}${id === selected ? '<small>Équipée</small>' : ''}</div>
-      ${weaponSVG(id, settings.skins[id])}
+    card.innerHTML = `<div class="wname">${WEAPONS[id].name}${id === selected ? '<small>Choisie</small>' : ''}</div>
+      ${weaponSVG(id, settings.skins[id], id === selected ? optic : null)}
       <div class="wdesc">${info.desc}</div>
       ${Object.entries(info.stats).map(([k, v]) => `<div class="stat"><span>${k}</span><div class="bar"><i style="width:${v}%"></i></div></div>`).join('')}`;
     card.onclick = () => { sfx.click(); onPick(id); };
@@ -95,54 +188,30 @@ export function renderWeaponCards(container, selected, onPick) {
   }
 }
 
-// ---------------------------------------------------------------------
-//  Casier (skins)
-// ---------------------------------------------------------------------
-let lockerTab = 'character';
-
-/** onChange() est appelé quand un skin ou l'arme principale change */
-export function initLocker(onChange) {
-  document.querySelectorAll('.locker-tabs button').forEach(b => {
-    b.onclick = () => { lockerTab = b.dataset.tab; renderLocker(); };
+/** Les 5 loadouts sous forme de cartes cliquables (menu M en jeu) */
+export function renderLoadoutCards(container, selected, onPick) {
+  container.innerHTML = '';
+  settings.loadouts.forEach((l, i) => {
+    const b = document.createElement('button');
+    b.className = 'lcard' + (i === selected ? ' selected' : '');
+    b.innerHTML = `<b>${i + 1}. ${escapeHtml(l.name)}</b>${weaponSVG(l.primary, settings.skins[l.primary], l.optic)}<small>${WEAPONS[l.primary].name} · ${OPTICS[l.optic].name}</small>`;
+    b.onclick = () => { sfx.click(); onPick(i); };
+    container.appendChild(b);
   });
-
-  function renderLocker() {
-    document.querySelectorAll('.locker-tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === lockerTab));
-    const grid = $('locker-grid');
-    grid.innerHTML = '';
-    const list = lockerTab === 'character' ? CHARACTER_SKINS : WEAPON_SKINS;
-    for (const [id, skin] of Object.entries(list)) {
-      const tile = document.createElement('div');
-      tile.className = 'skin-tile' + (settings.skins[lockerTab] === id ? ' selected' : '');
-      tile.innerHTML = (lockerTab === 'character' ? characterSVG(id) : weaponSVG(lockerTab, id)) + `<div class="sname">${skin.name}</div>`;
-      tile.onclick = () => {
-        settings.skins[lockerTab] = id; saveSettings(); sfx.click();
-        renderLocker(); onChange();
-      };
-      grid.appendChild(tile);
-    }
-    renderWeaponCards($('locker-primary'), settings.primary, (id) => {
-      settings.primary = id; saveSettings(); renderLocker(); onChange(id);
-    });
-  }
-  return renderLocker;
 }
 
 // ---------------------------------------------------------------------
-//  Menu principal : commandes + arme équipée
+//  Onglet Jouer : loadout équipé
 // ---------------------------------------------------------------------
 export function renderMainSide() {
-  const rows = [
-    [`${keyLabel(settings.keys.forward)} ${keyLabel(settings.keys.left)} ${keyLabel(settings.keys.back)} ${keyLabel(settings.keys.right)}`, 'Se déplacer'],
-    ['Clic G', 'Tirer'], ['Clic D', 'Viser / lunette'],
-    [keyLabel(settings.keys.sprint), 'Courir'], [keyLabel(settings.keys.crouch), "S'accroupir · glisser en courant"],
-    [keyLabel(settings.keys.jump), 'Sauter'], [keyLabel(settings.keys.reload), 'Recharger'],
-    [`${keyLabel(settings.keys.weapon1)} ${keyLabel(settings.keys.weapon2)}`, 'Changer d\'arme'],
-    [keyLabel(settings.keys.loadout), 'Choisir son arme'], [keyLabel(settings.keys.scoreboard), 'Scores'],
-  ];
-  $('controls-list').innerHTML = rows.map(([k, t]) => `<kbd>${escapeHtml(k)}</kbd><span>${t}</span>`).join('');
-  $('equipped-card').innerHTML = `<div class="card-title">🔫 Arme équipée</div>
-    <div class="equipped">${weaponSVG(settings.primary, settings.skins[settings.primary])}<div><b>${WEAPONS[settings.primary].name}</b><div class="hint">Change avec ${escapeHtml(keyLabel(settings.keys.loadout))} en jeu ou dans le Casier</div></div></div>`;
+  const l = activeLoadout();
+  $('equipped-card').innerHTML = `<div class="card-title">🎒 Loadout équipé</div>
+    <div class="equipped"><div class="lname">${escapeHtml(l.name)}</div>
+    ${weaponSVG(l.primary, settings.skins[l.primary], l.optic)}
+    <div><span class="tag">${WEAPONS[l.primary].name}</span><span class="tag">${OPTICS[l.optic].name}</span><span class="tag">Couteau</span></div>
+    <div class="hint">Change-le dans l'Inventaire, ou avec ${escapeHtml(keyLabel(settings.keys.loadout))} en jeu.</div>
+    <button class="small" id="btn-goto-inventory">Ouvrir l'inventaire</button></div>`;
+  $('btn-goto-inventory').onclick = () => document.querySelector('.topnav .tab[data-tab="inventory"]').click();
   const n = $('name-input').value.trim();
   $('profile-dot').textContent = n ? n[0].toUpperCase() : '?';
 }
@@ -208,7 +277,8 @@ export function initSettingsMenu() {
 // ---------------------------------------------------------------------
 //  Lobby
 // ---------------------------------------------------------------------
-export function renderLobby(lobby, myId, netInfo) {
+/** actions = { addBot(team, level), removeBot(id) } */
+export function renderLobby(lobby, myId, netInfo, actions) {
   $('lobby-code').textContent = lobby.code;
   const size = lobby.mode === '2v2' ? 2 : 1;
   const isHost = lobby.hostId === myId;
@@ -223,8 +293,8 @@ export function renderLobby(lobby, myId, netInfo) {
   warn.classList.toggle('hidden', !netInfo?.local);
   if (netInfo?.local) {
     warn.innerHTML = netInfo.lan
-      ? `📶 Le lien d'invitation marche pour tes potes <b>sur le même Wi-Fi</b> que toi (${escapeHtml(netInfo.lan)}).<br>Pour des potes <b>chez eux</b>, mets le jeu en ligne (README, partie 3).`
-      : `⚠️ Tu joues en local : tes potes ne peuvent pas rejoindre. Mets le jeu en ligne (README, partie 3).`;
+      ? `📶 Le lien marche pour tes potes <b>sur le même Wi-Fi</b>. Pour des potes <b>chez eux</b>, utilise ton lien Render.`
+      : `⚠️ Tu joues en local : tes potes ne peuvent pas rejoindre.`;
   }
 
   document.querySelectorAll('.mode-btn').forEach(b => {
@@ -235,18 +305,38 @@ export function renderLobby(lobby, myId, netInfo) {
 
   for (const team of ['A', 'B']) {
     const list = lobby.players.filter(p => p.team === team);
-    const slots = [];
+    const ul = $(`team-${team}`);
+    ul.innerHTML = '';
     for (let i = 0; i < size; i++) {
       const p = list[i];
+      const li = document.createElement('li');
       if (p) {
+        li.className = 'pcard';
         const host = p.id === lobby.hostId ? ' 👑' : '';
         const you = p.id === myId ? ' (toi)' : '';
-        slots.push(`<li class="pcard"><span class="pav" style="background:${TEAMS[team].css}">${escapeHtml(p.name[0]?.toUpperCase() || '?')}</span>
+        li.innerHTML = `<span class="pav" style="background:${TEAMS[team].css}">${p.isBot ? '🤖' : escapeHtml(p.name[0]?.toUpperCase() || '?')}</span>
           <span class="pname">${escapeHtml(p.name)}${you}${host}</span>
-          <span class="pstate ${p.ready ? 'ok' : ''}">${p.ready ? '✔ PRÊT' : 'en attente'}</span></li>`);
-      } else slots.push('<li class="pcard empty">Place libre</li>');
+          <span class="pstate ${p.ready ? 'ok' : ''}">${p.isBot ? 'BOT' : p.ready ? '✔ PRÊT' : 'en attente'}</span>`;
+        if (p.isBot && isHost) {
+          const rm = document.createElement('button'); rm.className = 'rm ghost'; rm.textContent = '✕'; rm.title = 'Retirer le bot';
+          rm.onclick = () => actions.removeBot(p.id);
+          li.appendChild(rm);
+        }
+      } else if (isHost) {
+        // Place libre : l'hôte peut la compléter avec un bot
+        li.className = 'pcard empty';
+        li.innerHTML = `<div class="addbot"><span>Place libre — ajouter un bot :</span></div>`;
+        const box = li.firstChild;
+        for (const [lvl, cfg] of Object.entries(BOT_LEVELS)) {
+          const b = document.createElement('button'); b.className = 'small'; b.textContent = cfg.name;
+          b.onclick = () => actions.addBot(team, lvl);
+          box.appendChild(b);
+        }
+      } else {
+        li.className = 'pcard empty'; li.textContent = 'Place libre';
+      }
+      ul.appendChild(li);
     }
-    $(`team-${team}`).innerHTML = slots.join('');
     const btn = document.querySelector(`.join-team[data-team="${team}"]`);
     btn.disabled = me?.team === team || list.length >= size;
     btn.textContent = me?.team === team ? 'Ton équipe' : list.length >= size ? 'Complète' : 'Rejoindre';
@@ -255,6 +345,10 @@ export function renderLobby(lobby, myId, netInfo) {
   const specs = lobby.players.filter(p => !p.team);
   $('spectators').textContent = specs.length ? `Sans équipe : ${specs.map(p => p.name).join(', ')}` : '';
 
+  // Choix rapide du loadout
+  const sel = $('lobby-loadout-select');
+  sel.innerHTML = settings.loadouts.map((l, i) => `<option value="${i}" ${i === settings.activeLoadout ? 'selected' : ''}>${i + 1}. ${escapeHtml(l.name)} — ${WEAPONS[l.primary].name}, ${OPTICS[l.optic].name}</option>`).join('');
+
   $('btn-ready').disabled = !me?.team;
   $('btn-ready').textContent = me?.ready ? 'Annuler « Prêt »' : '✔ Prêt';
   $('btn-ready').classList.toggle('primary', !me?.ready);
@@ -262,7 +356,7 @@ export function renderLobby(lobby, myId, netInfo) {
   const full = ['A', 'B'].every(t => lobby.players.filter(p => p.team === t).length === size);
   const inTeams = lobby.players.filter(p => p.team).length;
   $('lobby-status').textContent = !full
-    ? `En attente de joueurs (${inTeams}/${size * 2}) — envoie le lien à tes potes !`
+    ? `En attente de joueurs (${inTeams}/${size * 2}) — envoie le code à tes potes${isHost ? ' ou ajoute des bots' : ''} !`
     : 'Équipes complètes : la partie démarre quand tout le monde est prêt.';
 }
 

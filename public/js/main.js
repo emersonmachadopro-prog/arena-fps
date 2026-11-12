@@ -10,12 +10,13 @@ import { Effects } from './effects.js';
 import { HUD } from './hud.js';
 import { SoloSession } from './solo.js';
 import { NetGame } from './net.js';
+import { Showcase } from './showcase.js';
 import { initAudio } from './audio.js';
-import { settings, saveSettings, keyLabel } from './settings.js';
+import { settings, saveSettings, keyLabel, activeLoadout } from './settings.js';
 import { WEAPONS } from '/shared/constants.js';
 import {
   $, showScreen, currentScreen, toast, initSettingsMenu, renderLobby, renderEnd,
-  initLocker, renderWeaponCards, renderMainSide,
+  initTabs, showTab, initSkinGrid, initInventory, renderLoadoutCards, renderMainSide,
 } from './ui.js';
 
 // ---------------- Création des briques du jeu ----------------
@@ -25,17 +26,19 @@ const effects = new Effects(world.scene);
 const hud = new HUD();
 const player = new LocalPlayer(world.camera);
 const weapons = new WeaponSystem(world.vmScene, world.vmCamera, world.camera, effects);
+const showcase = new Showcase(world.scene, world.camera);
 weapons.setVisible(false);
 
 const ctx = { scene: world.scene, camera: world.camera, effects, hud, player, weapons };
 
 let session = null; // partie en cours : SoloSession ou NetGame (ou null dans les menus)
 let net = null;     // connexion multijoueur (créée au premier besoin)
-let returnTo = 'menu-main'; // écran où revenir après Paramètres / Casier
+let returnTo = 'menu-main'; // écran où revenir après les Paramètres
+let currentTab = 'play';
+const FRAMES = { play: 0.2, skins: 1.25, inventory: -0.4 }; // cadrage du personnage selon l'onglet
 
 // ---------------- Réseau : adresse à mettre dans le lien d'invitation ----------------
-// "localhost" ne marche QUE sur ton propre PC. Si tu joues en local, on utilise
-// l'adresse de ton PC sur le Wi-Fi (ex: http://192.168.1.42:3000).
+// "localhost" ne marche QUE sur ton propre PC. En local, on utilise l'adresse du PC sur le Wi-Fi.
 const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
 let netInfo = { local: isLocal, lan: null, publicUrl: null };
 fetch('/api/info').then(r => r.json()).then(info => {
@@ -47,8 +50,22 @@ function inviteLink(code) {
   return `${base}/?room=${code}`;
 }
 
+async function copy(text, okMsg) {
+  try { await navigator.clipboard.writeText(text); toast(okMsg); }
+  catch { prompt('Copie ceci :', text); }
+}
+
+// ---------------- Personnage affiché dans les menus ----------------
+function refreshShowcase() {
+  if (session) return;
+  const screen = currentScreen();
+  if ((screen === 'menu-lobby' || screen === 'menu-lobby-skins' || screen === 'menu-end') && net?.lobby) showcase.showLobby(net.lobby.players);
+  else { showcase.frame = FRAMES[currentTab] ?? 0.2; showcase.showMe(settings.skins, activeLoadout()); }
+}
+
 // ---------------- Lancer / quitter ----------------
 function enterGame(needClick) {
+  showcase.hide();
   input.enabled = true;
   hud.show(true);
   if (needClick) showScreen('menu-click');
@@ -69,6 +86,7 @@ function leaveGameView() {
   hud.scoreboard(false);
   weapons.setVisible(false);
   player.zoom = 1;
+  world.camera.rotation.z = 0;
 }
 
 function quitToMenu() {
@@ -80,6 +98,7 @@ function quitToMenu() {
   history.replaceState(null, '', '/');
   renderMainSide();
   showScreen('menu-main');
+  refreshShowcase();
 }
 
 function getName() {
@@ -89,10 +108,16 @@ function getName() {
   return n;
 }
 
+const lobbyActions = {
+  addBot: (team, level) => net?.addBot(team, level),
+  removeBot: (id) => net?.removeBot(id),
+};
+const drawLobby = () => { if (net?.lobby) { renderLobby(net.lobby, net.myId, netInfo, lobbyActions); refreshShowcase(); } };
+
 function ensureNet() {
   if (net) return net;
   net = new NetGame(ctx, {
-    onLobby: (l) => renderLobby(l, net.myId, netInfo),
+    onLobby: () => drawLobby(),
     onMatchStart: () => {
       session = net;
       enterGame(true); // le navigateur exige un clic pour capturer la souris
@@ -102,12 +127,13 @@ function ensureNet() {
       leaveGameView();
       renderEnd(e, myTeam);
       showScreen('menu-end');
+      refreshShowcase();
     },
     onBackToLobby: (e) => {
       session = null;
       leaveGameView();
       showScreen('menu-lobby');
-      if (net.lobby) renderLobby(net.lobby, net.myId, netInfo);
+      drawLobby();
       if (e?.message) toast(e.message);
     },
     onError: (msg) => { $('main-error').textContent = msg; toast(msg); },
@@ -115,40 +141,46 @@ function ensureNet() {
   return net;
 }
 
-// ---------------- Menu principal ----------------
+// ---------------- Menu principal : onglets ----------------
 $('name-input').value = settings.name || '';
 $('name-input').addEventListener('input', renderMainSide);
+initTabs((tab) => { currentTab = tab; if (tab === 'inventory') renderInventory(); if (tab === 'skins') renderSkins(); refreshShowcase(); });
+
+// Onglet Jouer
 $('btn-solo-passive').onclick = () => startSolo(false);
 $('btn-solo-active').onclick = () => startSolo(true);
 
-$('btn-create').onclick = async () => {
-  initAudio();
-  const res = await ensureNet().create(getName());
+async function openLobby(res) {
   if (!res?.ok) return ($('main-error').textContent = res?.error || 'Erreur');
+  $('main-error').textContent = '';
   history.replaceState(null, '', `/?room=${res.code}`);
   showScreen('menu-lobby');
-  if (net.lobby) renderLobby(net.lobby, net.myId, netInfo);
-};
-
+  drawLobby();
+}
+$('btn-create').onclick = async () => { initAudio(); openLobby(await ensureNet().create(getName())); };
 $('btn-join').onclick = async () => {
   initAudio();
   const code = $('code-input').value.trim().toUpperCase();
   if (code.length !== 5) return ($('main-error').textContent = 'Le code fait 5 caractères.');
-  const res = await ensureNet().join(code, getName());
-  if (!res?.ok) return ($('main-error').textContent = res.error);
-  $('main-error').textContent = '';
-  history.replaceState(null, '', `/?room=${res.code}`);
-  showScreen('menu-lobby');
-  if (net.lobby) renderLobby(net.lobby, net.myId, netInfo);
+  openLobby(await ensureNet().join(code, getName()));
 };
 $('code-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-join').click(); });
 
+// Quand les skins ou le loadout changent : on met à jour l'arme en main, l'aperçu et le serveur
+function onGearChange() {
+  if (!session) weapons.reset(activeLoadout());
+  if (net?.lobby) { net.setSkins(settings.skins); net.sendLoadout(); }
+  renderMainSide();
+  refreshShowcase();
+}
+// Onglet Personnage (skins)
+const renderSkins = initSkinGrid(document.querySelector('#tab-skins .locker-tabs'), $('locker-grid'), onGearChange);
+// Onglet Inventaire (loadouts)
+const renderInventory = initInventory(onGearChange);
+
 // ---------------- Lobby ----------------
-$('btn-copy-link').onclick = async () => {
-  const link = inviteLink(net.lobby.code);
-  try { await navigator.clipboard.writeText(link); toast(`Lien copié : ${link}`); }
-  catch { prompt('Copie ce lien :', link); }
-};
+$('btn-copy-code').onclick = () => copy(net.lobby.code, `Code copié : ${net.lobby.code}`);
+$('btn-copy-link').onclick = () => { const l = inviteLink(net.lobby.code); copy(l, `Lien copié : ${l}`); };
 document.querySelectorAll('.mode-btn').forEach(b => { b.onclick = () => net?.setMode(b.dataset.mode); });
 document.querySelectorAll('.join-team').forEach(b => { b.onclick = () => net?.setTeam(b.dataset.team); });
 $('btn-ready').onclick = () => {
@@ -156,18 +188,11 @@ $('btn-ready').onclick = () => {
   net?.setReady(!me?.ready);
 };
 $('btn-leave').onclick = quitToMenu;
-
-// ---------------- Casier (skins + arme principale) ----------------
-const renderLocker = initLocker((primaryChanged) => {
-  weapons.applySkins(settings.skins);
-  if (primaryChanged && !session) weapons.reset(settings.primary);
-  if (net?.lobby) { net.setSkins(settings.skins); if (primaryChanged) net.setLoadout(primaryChanged); }
-  renderMainSide();
-});
-const openLocker = () => { returnTo = currentScreen(); renderLocker(); showScreen('menu-locker'); };
-$('btn-locker-main').onclick = openLocker;
-$('btn-locker-lobby').onclick = openLocker;
-$('btn-locker-back').onclick = () => showScreen(returnTo);
+$('lobby-loadout-select').onchange = (e) => { settings.activeLoadout = +e.target.value; saveSettings(); onGearChange(); };
+// Skins depuis le lobby
+const renderLobbySkins = initSkinGrid($('lobby-locker-tabs'), $('lobby-locker-grid'), onGearChange);
+$('btn-lobby-skins').onclick = () => { renderLobbySkins(); showScreen('menu-lobby-skins'); };
+$('btn-lobby-skins-back').onclick = () => { showScreen('menu-lobby'); drawLobby(); };
 
 // ---------------- Paramètres ----------------
 const refreshSettings = initSettingsMenu();
@@ -176,19 +201,19 @@ $('btn-settings-main').onclick = openSettings;
 $('btn-settings-pause').onclick = openSettings;
 $('btn-settings-back').onclick = () => { renderMainSide(); showScreen(returnTo); };
 
-// ---------------- Choix d'arme en jeu (touche M) ----------------
+// ---------------- Choix du loadout en jeu (touche M) ----------------
 function openLoadout() {
   if (!session) return;
   const dead = !player.alive;
   const freeze = session === net && net.phase === 'freeze';
   $('loadout-hint').textContent = session !== net
-    ? (dead ? 'Tu réapparaîtras avec cette arme.' : 'Changement immédiat (mode entraînement).')
+    ? (dead ? 'Tu réapparaîtras avec ce loadout.' : 'Changement immédiat (mode entraînement).')
     : (freeze && !dead ? 'Préparation de manche : changement immédiat !' : 'Tu l\'auras à la prochaine manche.');
-  renderWeaponCards($('loadout-cards'), settings.primary, (id) => {
-    saveSettings();
-    const now = session.setLoadout(id);
-    saveSettings();
-    if (session !== net) toast(now ? `${WEAPONS[id].name} équipée` : `${WEAPONS[id].name} à la réapparition`);
+  renderLoadoutCards($('loadout-cards'), settings.activeLoadout, (i) => {
+    const now = session.setLoadout(i);
+    const l = settings.loadouts[i];
+    if (session !== net) toast(now ? `${l.name} équipé` : `${l.name} à la réapparition`);
+    renderMainSide();
     resume();
   });
   showScreen('menu-loadout');
@@ -214,8 +239,7 @@ world.renderer.domElement.addEventListener('click', () => { if (session && !curr
 $('btn-replay').onclick = () => net?.playAgain();
 $('btn-end-quit').onclick = quitToMenu;
 
-// Sécurité : si Ctrl+W passe quand même (navigateur sans plein écran),
-// le navigateur demande confirmation avant de fermer pendant une partie.
+// Sécurité : si Ctrl+W passe quand même, le navigateur demande confirmation pendant une partie.
 addEventListener('beforeunload', (e) => {
   if (session || net?.lobby) { e.preventDefault(); e.returnValue = ''; }
 });
@@ -227,11 +251,12 @@ if (invited) {
   toast(`Invitation reçue (${invited.toUpperCase()}) : choisis un pseudo puis « Rejoindre »`, 5000);
 }
 renderMainSide();
+showTab('play');
 showScreen('menu-main');
+refreshShowcase();
 
 // ---------------- Boucle de jeu ----------------
 let last = performance.now();
-let menuAngle = 0;
 
 function loop() {
   requestAnimationFrame(loop);
@@ -248,7 +273,8 @@ function loop() {
     weapons.update(dt, input, player, session, session.canFire() && input.locked);
     session.update(dt);
     hud.update({
-      hp: player.hp, weapon: weapons.current, primary: weapons.primary, ads: weapons.ads, scoped: weapons.scoped && player.alive,
+      hp: player.hp, weapon: weapons.current, primary: weapons.primary, ads: weapons.ads,
+      optic: weapons.currentOptic, overlay: player.alive ? weapons.overlay : null,
       mag: weapons.mag, reserve: weapons.reserve, reloading: weapons.reloading, spread: weapons.lastSpread,
       ...session.hudState(),
     });
@@ -256,11 +282,7 @@ function loop() {
     $('dead-hint').classList.toggle('hidden', player.alive);
     $('dead-key').textContent = keyLabel(settings.keys.loadout);
   } else {
-    // Dans les menus : la caméra tourne lentement autour de l'arène
-    menuAngle += dt * 0.06;
-    world.camera.position.set(Math.sin(menuAngle) * 22, 9, Math.cos(menuAngle) * 16);
-    world.camera.lookAt(0, 1, 0);
-    if (world.camera.fov !== settings.fov) { world.camera.fov = settings.fov; world.camera.updateProjectionMatrix(); }
+    showcase.update(dt);
   }
 
   effects.update(dt);
@@ -271,5 +293,5 @@ loop();
 
 // Outil de debug : ouvre http://localhost:3000/?debug pour accéder au jeu depuis la console (F12)
 if (new URLSearchParams(location.search).has('debug')) {
-  window.DEBUG = { ctx, input, get session() { return session; }, get net() { return net; }, startSolo };
+  window.DEBUG = { ctx, input, showcase, get session() { return session; }, get net() { return net; }, startSolo };
 }

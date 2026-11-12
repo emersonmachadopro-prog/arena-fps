@@ -16,7 +16,7 @@ export class HUD {
   show(v) { this.el.classList.toggle('hidden', !v); }
 
   /** Mise à jour à chaque image */
-  update({ hp, weapon, primary, ads = 0, scoped = false, mag, reserve, reloading, spread, score, timeLeft, timerLabel, roundLabel }) {
+  update({ hp, weapon, primary, ads = 0, optic = null, overlay = null, mag, reserve, reloading, spread, score, timeLeft, timerLabel, roundLabel }) {
     $('hp').textContent = Math.ceil(hp);
     const bar = $('hp-bar').firstElementChild;
     bar.style.width = `${(hp / PLAYER.MAX_HP) * 100}%`;
@@ -41,8 +41,10 @@ export class HUD {
     this.crosshair.style.setProperty('--gap', `${Math.min(gap, 80)}px`);
     this.crosshair.classList.toggle('knife', weapon === 'knife');
     this.crosshair.style.opacity = weapon !== 'knife' ? Math.max(0, 1 - ads * 2) : 1;
-    // Lunette du sniper
-    $('scope').classList.toggle('hidden', !scoped);
+    // Viseurs : lunette sniper / lunette moyenne / point rouge
+    $('scope').classList.toggle('hidden', overlay !== 'scope');
+    $('midscope').classList.toggle('hidden', overlay !== 'mid');
+    $('reddot').classList.toggle('hidden', !(optic === 'reddot' && weapon !== 'knife' && ads > 0.9));
 
     if (score) { $('score-A').textContent = score.A; $('score-B').textContent = score.B; }
     if (timerLabel !== undefined) $('round-timer').textContent = timerLabel;

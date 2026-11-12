@@ -7,7 +7,7 @@ import { MAP_BOXES, SPAWNS, BOT_WAYPOINTS } from '/shared/map.js';
 import { moveAndCollide, raycastWorld, traceShot, dirFromAngles } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
 import { sfx } from './audio.js';
-import { settings, saveSettings } from './settings.js';
+import { settings, saveSettings, activeLoadout } from './settings.js';
 import { CHARACTER_SKINS } from '/shared/skins.js';
 
 const SKIN_IDS = Object.keys(CHARACTER_SKINS);
@@ -62,7 +62,7 @@ export class SoloSession {
   spawnPlayer() {
     const s = SPAWNS.A[Math.floor(Math.random() * SPAWNS.A.length)];
     this.ctx.player.spawn(s);
-    this.ctx.weapons.reset(settings.primary); // arme choisie avec M
+    this.ctx.weapons.reset(activeLoadout()); // loadout choisi avec M
     this.ctx.weapons.setVisible(true);
   }
 
@@ -73,10 +73,10 @@ export class SoloSession {
   switchWeapon() {}
 
   /** Choix d'arme (touche M) : appliqué à la prochaine apparition. Retourne true si appliqué tout de suite. */
-  setLoadout(w) {
-    settings.primary = w; saveSettings();
-    // En entraînement, on change tout de suite si on est en vie
-    if (this.ctx.player.alive) { this.ctx.weapons.reset(w); this.ctx.weapons.setVisible(true); return true; }
+  /** Choix du loadout (touche M). En entraînement : changement immédiat si on est en vie. */
+  setLoadout(index) {
+    settings.activeLoadout = index; saveSettings();
+    if (this.ctx.player.alive) { this.ctx.weapons.reset(activeLoadout()); this.ctx.weapons.setVisible(true); return true; }
     return false;
   }
 
