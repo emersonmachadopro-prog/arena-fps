@@ -150,6 +150,9 @@ Option désactivable dans ⚙ Paramètres.
 **Inventaire** (5 loadouts : arme principale + viseur, celui marqué « Équipé » est utilisé en jeu).
 Pour ajouter un skin : `shared/skins.js` (une ligne = un skin).
 
+**Sons :** les bruitages sont dans `public/sounds/` (générés avec ElevenLabs). Pour en changer un, remplace le
+fichier .mp3 en gardant le même nom. S'il en manque un, le jeu utilise un son fabriqué par le code.
+
 **Viseurs :** mire (de base), point rouge, lunette x2.5, lunette sniper x4 (Kar98k uniquement).
 
 **Bots en multijoueur :** dans le salon, l'hôte peut compléter une place libre avec un bot

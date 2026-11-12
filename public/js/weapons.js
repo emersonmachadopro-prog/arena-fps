@@ -428,7 +428,7 @@ export class WeaponSystem {
     const end = { x: eye.x + dir.x * res.dist, y: eye.y + dir.y * res.dist, z: eye.z + dir.z * res.dist };
     const from = this.overlay ? { x: eye.x + dir.x * 0.5, y: eye.y - 0.15, z: eye.z + dir.z * 0.5 } : this.muzzleWorld();
     this.effects.tracer(from, end);
-    if (res.hitWall) this.effects.impact(end);
+    if (res.hitWall) { this.effects.impact(end); sfx.impact(end); }
     if (res.hitPlayer && res.confirmed) this.effects.blood(end);
 
     // Recul : la vue monte (moins en visant), et part un peu sur les côtés

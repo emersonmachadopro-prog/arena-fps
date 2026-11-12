@@ -159,7 +159,7 @@ export class NetGame {
     const from = av && !av.dead ? av.muzzleWorld() : { x: e.from.x + e.dir.x * 0.7, y: e.from.y - 0.25, z: e.from.z + e.dir.z * 0.7 }; // depuis le canon de l'arme
     if (e.weapon !== 'knife') {
       this.ctx.effects.tracer(from, to);
-      if (e.hitWall) this.ctx.effects.impact(to);
+      if (e.hitWall) { this.ctx.effects.impact(to); sfx.impact(to); }
       (e.weapon === 'kar98k' ? sfx.sniper : sfx.shot).call(sfx, from);
     } else {
       sfx.knife(from);

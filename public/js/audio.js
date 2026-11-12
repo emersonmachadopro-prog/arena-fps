@@ -9,6 +9,45 @@ import { settings, onSettingsChange } from './settings.js';
 
 let ctx = null, master = null, reverbIn = null, noiseBuf = null;
 
+// ---------------------------------------------------------------------
+//  Sons enregistrés (dossier public/sounds/, générés avec ElevenLabs).
+//  S'il en manque un, le jeu utilise automatiquement le son fabriqué par le code.
+// ---------------------------------------------------------------------
+const SAMPLE_NAMES = [
+  'ak_shot', 'ak_shot_far', 'kar_shot', 'kar_shot_far', 'knife_swing', 'empty_click',
+  'mag_out', 'mag_in', 'charge_back', 'charge_release', 'bolt_open', 'bolt_close', 'round_in',
+  'weapon_switch', 'knife_flip', 'step_1', 'step_2', 'step_3', 'land', 'slide', 'hurt',
+  'bullet_impact', 'round_start', 'round_win', 'round_lose',
+  // Optionnels : ajoute 'hitmarker', 'headshot', 'kill', 'ui_click' ici si tu mets ces fichiers dans public/sounds/
+];
+const buffers = {};
+
+function loadSamples() {
+  for (const name of SAMPLE_NAMES) {
+    fetch(`/sounds/${name}.mp3`)
+      .then(r => (r.ok ? r.arrayBuffer() : null))
+      .then(ab => ab && ctx.decodeAudioData(ab))
+      .then(buf => { if (buf) buffers[name] = buf; })
+      .catch(() => {});
+  }
+}
+
+/**
+ * Joue un son enregistré. Retourne false s'il n'est pas (encore) chargé.
+ * pos = position 3D (null = son "dans la tête" : nos propres actions, l'interface)
+ * ref = distance jusqu'à laquelle le son garde tout son volume
+ */
+function sample(name, pos = null, { vol = 1, reverb = 0.1, far = 60, ref = 2.5, pitch = 0.05 } = {}) {
+  const buf = buffers[name];
+  if (!ctx || !buf) return false;
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.playbackRate.value = 1 + (Math.random() * 2 - 1) * pitch; // légère variation : moins répétitif
+  src.connect(output(pos, vol, reverb, far, ref));
+  src.start();
+  return true;
+}
+
 /** Le navigateur n'autorise le son qu'après un clic : on initialise à ce moment. */
 export function initAudio() {
   if (ctx) { ctx.resume(); return; }
@@ -39,6 +78,8 @@ export function initAudio() {
   reverbIn = ctx.createGain(); reverbIn.gain.value = 0.35;
   const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 3500;
   reverbIn.connect(conv).connect(lp).connect(master);
+
+  loadSamples();
 }
 onSettingsChange(s => { if (master) master.gain.value = s.volume; });
 
@@ -63,7 +104,7 @@ export function setListener(camera) {
  * Point d'entrée d'un son : s'il a une position, il passe par un "panner" 3D.
  * reverb = quantité d'écho (0..1)
  */
-function output(pos, vol = 1, reverb = 0.2, far = 60) {
+function output(pos, vol = 1, reverb = 0.2, far = 60, ref = 2.5) {
   const g = ctx.createGain();
   g.gain.value = vol;
   let head = g;
@@ -71,7 +112,7 @@ function output(pos, vol = 1, reverb = 0.2, far = 60) {
     const pan = ctx.createPanner();
     pan.panningModel = 'HRTF';
     pan.distanceModel = 'inverse';
-    pan.refDistance = 2.5; pan.rolloffFactor = 1.1; pan.maxDistance = far;
+    pan.refDistance = ref; pan.rolloffFactor = 1.1; pan.maxDistance = far;
     if (pan.positionX) { pan.positionX.value = pos.x; pan.positionY.value = pos.y; pan.positionZ.value = pos.z; }
     else pan.setPosition(pos.x, pos.y, pos.z);
     g.connect(pan).connect(master);
@@ -128,6 +169,7 @@ export const sfx = {
   shot(pos = null) {
     if (!ctx) return;
     const d = distTo(pos);
+    if (sample(pos && d > 28 ? 'ak_shot_far' : 'ak_shot', pos, { vol: pos ? 1.2 : 0.9, ref: 10, far: 150, reverb: 0.12 })) return;
     const out = output(pos, pos ? 1.4 : 1, 0.45 + Math.min(d / 60, 0.4), 120);
     const bright = d > 25 ? 1200 : 6000;                                                 // les tirs lointains sont plus sourds
     noise(out, { dur: 0.04, type: 'highpass', freq: 2200, vol: 0.9 });                    // claquement
@@ -140,6 +182,7 @@ export const sfx = {
   sniper(pos = null) {
     if (!ctx) return;
     const d = distTo(pos);
+    if (sample(pos && d > 30 ? 'kar_shot_far' : 'kar_shot', pos, { vol: pos ? 1.3 : 1, ref: 14, far: 200, reverb: 0.15, pitch: 0.03 })) return;
     const out = output(pos, pos ? 1.6 : 1.1, 0.7, 160);
     noise(out, { dur: 0.05, type: 'highpass', freq: 1800, vol: 1.0 });
     noise(out, { dur: 0.42, type: 'lowpass', freq: d > 30 ? 900 : 4500, sweep: 250, vol: 1.0 });
@@ -148,12 +191,14 @@ export const sfx = {
   },
   knife(pos = null) {
     if (!ctx) return;
+    if (sample('knife_swing', pos, { vol: 0.9, far: 20 })) return;
     const out = output(pos, 0.8, 0.05, 20);
     noise(out, { dur: 0.18, type: 'bandpass', freq: 700, sweep: 3200, q: 2.5, vol: 0.5, attack: 0.04 }); // "fsshh"
   },
   /** Bruit de pas. loud = en courant. pos = null pour nos propres pas */
   step(pos = null, loud = false) {
     if (!ctx) return;
+    if (sample(`step_${1 + Math.floor(Math.random() * 3)}`, pos, { vol: (pos ? 1.5 : 0.45) * (loud ? 1.25 : 1), ref: 3, far: 35, reverb: 0.03, pitch: 0.08 })) return;
     const out = output(pos, (pos ? 1.6 : 0.5) * (loud ? 1.3 : 1), 0.08, 35);
     const p = 0.85 + Math.random() * 0.3;
     tone(out, { dur: 0.07, freq: 95 * p, end: 55, vol: 0.7 });                                     // talon
@@ -162,6 +207,7 @@ export const sfx = {
   },
   land(pos = null) {
     if (!ctx) return;
+    if (sample('land', pos, { vol: pos ? 1.4 : 0.7, ref: 3, far: 35 })) return;
     const out = output(pos, pos ? 1.6 : 0.7, 0.1, 35);
     tone(out, { dur: 0.12, freq: 80, end: 40, vol: 0.9 });
     noise(out, { dur: 0.1, type: 'lowpass', freq: 700, vol: 0.6 });
@@ -169,45 +215,48 @@ export const sfx = {
   },
 
   // ---- Mécanique des armes (rechargement, inspection, sortie) ----
-  magOut(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.5, 2600); noise(o, { t: 0.02, dur: 0.12, type: 'bandpass', freq: 1200, q: 2, vol: 0.25 }); },
-  magIn(pos) { if (!ctx) return; const o = output(pos, 1, 0.08, 25); noise(o, { dur: 0.05, type: 'bandpass', freq: 900, q: 2, vol: 0.6 }); metal(o, 0.03, 0.6, 2300); tone(o, { t: 0.03, dur: 0.06, freq: 180, end: 90, vol: 0.4 }); },
-  chargeBack(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1800, sweep: 1200, q: 3, vol: 0.35 }); metal(o, 0.09, 0.4, 3000); },
-  chargeRelease(pos) { if (!ctx) return; const o = output(pos, 1, 0.1, 25); metal(o, 0, 0.7, 2500); metal(o, 0.012, 0.4, 3800); tone(o, { dur: 0.08, freq: 260, end: 120, vol: 0.35 }); },
-  boltUp(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.45, 2800); },
-  boltBack(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.12, type: 'bandpass', freq: 1500, sweep: 900, q: 3, vol: 0.35 }); metal(o, 0.11, 0.35, 3300); },
-  boltForward(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1000, sweep: 1700, q: 3, vol: 0.35 }); metal(o, 0.09, 0.45, 2900); },
-  boltDown(pos) { if (!ctx) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.55, 2400); },
-  roundIn(pos) { if (!ctx) return; const o = output(pos, 0.8, 0.04, 20); metal(o, 0, 0.35, 3600); noise(o, { t: 0.02, dur: 0.04, type: 'bandpass', freq: 1400, q: 3, vol: 0.2 }); },
-  cloth(pos) { if (!ctx) return; const o = output(pos, 0.6, 0, 15); noise(o, { dur: 0.16, type: 'bandpass', freq: 900, q: 0.8, vol: 0.18, attack: 0.04 }); },
-  knifeFlip(pos) { if (!ctx) return; const o = output(pos, 0.6, 0.03, 15); metal(o, 0, 0.18, 5200); },
+  magOut(pos) { if (!ctx || sample('mag_out', pos, { far: 25, ref: 2 })) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.5, 2600); noise(o, { t: 0.02, dur: 0.12, type: 'bandpass', freq: 1200, q: 2, vol: 0.25 }); },
+  magIn(pos) { if (!ctx || sample('mag_in', pos, { far: 25, ref: 2 })) return; const o = output(pos, 1, 0.08, 25); noise(o, { dur: 0.05, type: 'bandpass', freq: 900, q: 2, vol: 0.6 }); metal(o, 0.03, 0.6, 2300); tone(o, { t: 0.03, dur: 0.06, freq: 180, end: 90, vol: 0.4 }); },
+  chargeBack(pos) { if (!ctx || sample('charge_back', pos, { far: 25, ref: 2 })) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1800, sweep: 1200, q: 3, vol: 0.35 }); metal(o, 0.09, 0.4, 3000); },
+  chargeRelease(pos) { if (!ctx || sample('charge_release', pos, { far: 25, ref: 2 })) return; const o = output(pos, 1, 0.1, 25); metal(o, 0, 0.7, 2500); metal(o, 0.012, 0.4, 3800); tone(o, { dur: 0.08, freq: 260, end: 120, vol: 0.35 }); },
+  boltUp(pos) { if (!ctx || sample('bolt_open', pos, { far: 25, ref: 2 })) return; const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.45, 2800); },
+  boltBack(pos) { if (!ctx || buffers.bolt_open) return; /* déjà inclus dans le son "bolt_open" */ const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.12, type: 'bandpass', freq: 1500, sweep: 900, q: 3, vol: 0.35 }); metal(o, 0.11, 0.35, 3300); },
+  boltForward(pos) { if (!ctx || sample('bolt_close', pos, { far: 25, ref: 2 })) return; const o = output(pos, 0.9, 0.05, 25); noise(o, { dur: 0.1, type: 'bandpass', freq: 1000, sweep: 1700, q: 3, vol: 0.35 }); metal(o, 0.09, 0.45, 2900); },
+  boltDown(pos) { if (!ctx || buffers.bolt_close) return; /* déjà inclus dans le son "bolt_close" */ const o = output(pos, 0.9, 0.05, 25); metal(o, 0, 0.55, 2400); },
+  roundIn(pos) { if (!ctx || sample('round_in', pos, { far: 20, ref: 2 })) return; const o = output(pos, 0.8, 0.04, 20); metal(o, 0, 0.35, 3600); noise(o, { t: 0.02, dur: 0.04, type: 'bandpass', freq: 1400, q: 3, vol: 0.2 }); },
+  cloth(pos) { if (!ctx || sample('weapon_switch', pos, { vol: 0.45, far: 15 })) return; const o = output(pos, 0.6, 0, 15); noise(o, { dur: 0.16, type: 'bandpass', freq: 900, q: 0.8, vol: 0.18, attack: 0.04 }); },
+  knifeFlip(pos) { if (!ctx || sample('knife_flip', pos, { vol: 0.8, far: 15, pitch: 0.12 })) return; const o = output(pos, 0.6, 0.03, 15); metal(o, 0, 0.18, 5200); },
+
+  /** Impact de balle sur un mur */
+  impact(pos) { if (ctx) sample('bullet_impact', pos, { vol: 0.8, ref: 3, far: 40, pitch: 0.12 }); },
 
   /** Bruit de rechargement générique d'un autre joueur (positionné) */
   remoteReload(pos, weapon) {
     if (!ctx) return;
-    if (weapon === 'kar98k') { this.boltUp(pos); setTimeout(() => this.boltBack(pos), 200); }
+    if (weapon === 'kar98k') { this.boltUp(pos); setTimeout(() => this.boltBack(pos), 200); setTimeout(() => this.roundIn(pos), 700); }
     else { this.magOut(pos); setTimeout(() => this.magIn(pos), 900); }
   },
 
   // ---- Interface ----
-  empty() { if (ctx) metal(output(null, 0.8), 0, 0.3, 4500); },
+  empty() { if (ctx && !sample('empty_click', null, { vol: 0.8 })) metal(output(null, 0.8), 0, 0.3, 4500); },
   hit(head) {
-    if (!ctx) return;
+    if (!ctx || sample(head ? 'headshot' : 'hitmarker', null, { reverb: 0, pitch: 0 })) return;
     const o = output(null, 1, 0);
     if (head) { tone(o, { dur: 0.18, freq: 1500, vol: 0.28 }); tone(o, { t: 0.02, dur: 0.22, freq: 2250, vol: 0.18 }); }
     else { noise(o, { dur: 0.04, type: 'bandpass', freq: 2600, q: 4, vol: 0.4 }); tone(o, { dur: 0.05, freq: 1100, vol: 0.12, type: 'square' }); }
   },
-  kill() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.1, freq: 760, vol: 0.2 }); tone(o, { t: 0.08, dur: 0.2, freq: 1140, vol: 0.2 }); },
-  hurt() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.15, freq: 180, end: 90, vol: 0.4, type: 'triangle' }); noise(o, { dur: 0.08, type: 'lowpass', freq: 600, vol: 0.4 }); },
-  switchWeapon() { if (!ctx) return; this.cloth(); metal(output(null, 0.6), 0.08, 0.25, 3000); },
-  roundStart() { if (!ctx) return; const o = output(null, 1, 0); tone(o, { dur: 0.12, freq: 523, vol: 0.2 }); tone(o, { t: 0.12, dur: 0.25, freq: 784, vol: 0.2 }); },
+  kill() { if (!ctx || sample('kill', null, { reverb: 0, pitch: 0 })) return; const o = output(null, 1, 0); tone(o, { dur: 0.1, freq: 760, vol: 0.2 }); tone(o, { t: 0.08, dur: 0.2, freq: 1140, vol: 0.2 }); },
+  hurt() { if (!ctx || sample('hurt', null, { reverb: 0 })) return; const o = output(null, 1, 0); tone(o, { dur: 0.15, freq: 180, end: 90, vol: 0.4, type: 'triangle' }); noise(o, { dur: 0.08, type: 'lowpass', freq: 600, vol: 0.4 }); },
+  switchWeapon() { if (!ctx || sample('weapon_switch', null, { vol: 0.7 })) return; this.cloth(); metal(output(null, 0.6), 0.08, 0.25, 3000); },
+  roundStart() { if (!ctx || sample('round_start', null, { reverb: 0, pitch: 0 })) return; const o = output(null, 1, 0); tone(o, { dur: 0.12, freq: 523, vol: 0.2 }); tone(o, { t: 0.12, dur: 0.25, freq: 784, vol: 0.2 }); },
   roundEnd(win) {
-    if (!ctx) return;
+    if (!ctx || sample(win ? 'round_win' : 'round_lose', null, { reverb: 0, pitch: 0 })) return;
     const o = output(null, 1, 0);
     if (win) { tone(o, { dur: 0.15, freq: 523, vol: 0.2 }); tone(o, { t: 0.12, dur: 0.15, freq: 659, vol: 0.2 }); tone(o, { t: 0.24, dur: 0.35, freq: 784, vol: 0.2 }); }
     else { tone(o, { dur: 0.2, freq: 392, vol: 0.2 }); tone(o, { t: 0.18, dur: 0.4, freq: 311, vol: 0.2 }); }
   },
-  slide() { if (ctx) noise(output(null, 1, 0), { dur: 0.5, type: 'lowpass', freq: 900, sweep: 300, vol: 0.3, attack: 0.03 }); },
-  click() { if (ctx) tone(output(null, 1, 0), { dur: 0.03, freq: 1200, vol: 0.08, type: 'square' }); },
+  slide() { if (ctx && !sample('slide', null, { vol: 0.8 })) noise(output(null, 1, 0), { dur: 0.5, type: 'lowpass', freq: 900, sweep: 300, vol: 0.3, attack: 0.03 }); },
+  click() { if (ctx && !sample('ui_click', null, { reverb: 0, pitch: 0 })) tone(output(null, 1, 0), { dur: 0.03, freq: 1200, vol: 0.08, type: 'square' }); },
 
   // Compatibilité : ancien nom (rechargement complet joué d'un coup)
   reload() {},
