@@ -10,7 +10,7 @@
 // =====================================================================
 import * as THREE from 'three';
 import { WEAPONS, PLAYER, OPTICS, validOptic, reloadPlan, roundsInserted, pelletDirs } from '/shared/constants.js';
-import { WEAPON_SKINS, CHARACTER_SKINS } from '/shared/skins.js';
+import { WEAPON_SKINS, CHARACTER_SKINS, GLOVE_SKINS } from '/shared/skins.js';
 import { dirFromAngles } from '/shared/physics.js';
 import { sfx } from './audio.js';
 import { settings } from './settings.js';
@@ -25,7 +25,7 @@ const POSES = {
   shotgun: { hip: [0.17, -0.16, -0.6], adsZ: { iron: -0.62, reddot: -0.5 } },
   glock:  { hip: [0.115, -0.135, -0.4], adsZ: { iron: -0.36 } },
 };
-const INSPECT_TIME = { butterfly: 3.4, ak: 3.0, mp5: 2.8, shotgun: 3.2, kar98k: 3.6, glock: 2.6, knife: 2.8 };
+const INSPECT_TIME = { butterfly: 4.2, ak: 3.0, mp5: 2.8, shotgun: 3.2, kar98k: 3.6, glock: 2.6, knife: 2.8 };
 
 const ease = (t) => t * t * (3 - 2 * t);
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
@@ -55,9 +55,12 @@ function track(t, keys) {
 //  ch = levier d'armement tiré (0..1) · bolt = culasse ouverte (0..1)
 // ---------------------------------------------------------------------
 const TILT = { rz: 0.42, rx: 0.1, py: -0.03, px: -0.02 };
+const BP = { px: -0.09, py: 0.07, pz: 0.1, ry: -0.35, rz: 0.25, rx: 0.12 };   // papillon : pose d'inspection
+const BC = { px: -0.07, py: 0.1, pz: 0.12, ry: -0.15, rz: 0.0, rx: 1.2 };     // papillon : Chaplin (lame vers le haut)
+const ITILT = { rz: 0.45, rx: -0.06, ry: 0.12, py: 0.06, px: -0.08, pz: 0.02 }; // AK penchée pour bien voir le chargeur
 const ANIMS = {
   // A1 : il reste des balles → chargeur sorti, nouveau chargeur, claque
-  akTactical: {
+  classicTactical: {
     keys: [
       [0, {}],
       [0.12, { ...TILT, hy: -0.06, hz: 0.24 }],
@@ -70,8 +73,47 @@ const ANIMS = {
     ],
     events: [[0.2, 'magOut'], [0.72, 'magIn']],
   },
-  // A2 : à vide → pareil + on tire le levier d'armement
+  // ---- AK : rechargement "irakien" (inspiré de ta vidéo) ----
+  // La main gauche reste sur le garde-main. La main droite lâche la poignée, prend un chargeur neuf,
+  // s'en sert pour taper la palette : l'ancien chargeur bascule et tombe, le neuf s'accroche par l'avant
+  // et se verrouille en basculant vers l'arrière. nm = chargeur neuf dans la main, oh = ancien caché.
+  akTactical: {
+    keys: [
+      [0, {}],
+      [0.1, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1 }],             // la main va chercher le chargeur neuf
+      [0.22, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1 }],           // il remonte sous l'arme
+      [0.3, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1 }],            // TAC : il frappe la palette
+      [0.34, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02 }], // l'ancien bascule
+      [0.44, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0 }],      // et tombe
+      [0.47, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1 }],
+      [0.5, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0 }],        // le neuf s'accroche par l'avant
+      [0.6, { ...ITILT, rz: 0.36, rx: 0.1, rhx: 0.0, rhy: -0.085, rhz: -0.17, magY: 0, magR: 0 }],          // clac, verrouillé
+      [0.78, { rz: 0.08 }],
+      [1, {}],
+    ],
+    events: [[0.04, 'cloth'], [0.31, 'magOut'], [0.6, 'magIn']],
+  },
   akEmpty: {
+    keys: [
+      [0, {}],
+      [0.08, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1 }],
+      [0.17, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1 }],
+      [0.23, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1 }],
+      [0.26, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02 }],
+      [0.34, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0 }],
+      [0.36, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1 }],
+      [0.39, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0 }],
+      [0.47, { ...ITILT, rz: 0.36, rx: 0.1, rhx: 0.0, rhy: -0.085, rhz: -0.17, magY: 0, magR: 0 }],
+      // la main droite passe par-dessus l'arme et arme le levier (comme dans la vidéo)
+      [0.6, { rz: -0.22, ry: 0.08, rx: 0.04, rhx: 0.03, rhy: 0.125, rhz: -0.17 }],
+      [0.7, { rz: -0.26, ry: 0.1, rx: 0.06, rhx: 0.03, rhy: 0.125, rhz: -0.07, ch: 1, pz: 0.015 }],
+      [0.74, { rz: -0.2, ry: 0.08, rx: 0.1, rhx: 0.035, rhy: 0.135, rhz: -0.05, ch: 0 }],
+      [0.86, { rz: 0.05 }],
+      [1, {}],
+    ],
+    events: [[0.03, 'cloth'], [0.24, 'magOut'], [0.47, 'magIn'], [0.68, 'chargeBack'], [0.73, 'chargeRelease']],
+  },
+  akEmptyOld: {
     keys: [
       [0, {}],
       [0.1, { ...TILT, hy: -0.06, hz: 0.24 }],
@@ -146,22 +188,28 @@ const ANIMS = {
     ],
     events: [[0.05, 'cloth'], [0.36, 'knifeFlip'], [0.58, 'knifeFlip'], [0.64, 'magIn']],
   },
+  // Inspection du papillon (inspirée de ta vidéo "Chaplin") :
+  // rollovers autour de l'annulaire → le couteau se lève, lame vers le haut, pincé aux goupilles,
+  // manches écartés en T qui se balancent comme un pendule → aérien qui le referme puis le rouvre.
   bflyInspect: {
     keys: [
       [0, {}],
-      [0.08, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35 }],
-      // rotations autour de l'annulaire : fermé, ouvert, fermé, ouvert…
-      [0.18, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35, bs: Math.PI, hb: Math.PI }],
-      [0.28, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35, bs: Math.PI * 2, ha: Math.PI, hb: Math.PI }],
-      [0.38, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35, bs: Math.PI * 3, ha: 0, hb: Math.PI }],
-      [0.48, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35, bs: Math.PI * 4, ha: 0, hb: 0 }],
-      // "aerial" : le couteau tourne sur lui-même au-dessus de la main
-      [0.6, { px: -0.06, py: 0.1, pz: 0.08, ry: -0.3, rz: 0.2, bs: Math.PI * 6, ha: Math.PI * 0.5, hb: Math.PI * 1.5 }],
-      [0.7, { px: -0.08, py: 0.06, pz: 0.08, ry: -0.5, rz: 0.35, bs: Math.PI * 8, ha: 0, hb: 0 }],
-      [0.82, { px: -0.07, py: 0.05, pz: 0.07, ry: -1.1, rz: 0.6, bs: Math.PI * 8 }],       // on admire la lame
+      [0.07, { ...BP }],
+      [0.15, { ...BP, bs: Math.PI, hb: Math.PI }],
+      [0.23, { ...BP, bs: Math.PI * 2, ha: Math.PI, hb: Math.PI }],
+      [0.31, { ...BP, bs: Math.PI * 3, ha: 0, hb: Math.PI }],
+      [0.39, { ...BP, bs: Math.PI * 4, ha: 0, hb: 0 }],
+      [0.47, { ...BC, bs: Math.PI * 4, ha: Math.PI / 2, hb: Math.PI / 2 }],                          // Chaplin !
+      [0.55, { ...BC, rz: 0.28, bs: Math.PI * 4, ha: Math.PI / 2 + 0.35, hb: Math.PI / 2 - 0.3 }],  // balancier…
+      [0.63, { ...BC, rz: -0.22, bs: Math.PI * 4, ha: Math.PI / 2 - 0.3, hb: Math.PI / 2 + 0.35 }],
+      [0.7, { ...BC, rz: 0.06, bs: Math.PI * 4, ha: Math.PI / 2 + 0.08, hb: Math.PI / 2 - 0.08 }],
+      [0.74, { ...BC, bs: Math.PI * 4, ha: Math.PI / 2, hb: Math.PI / 2 }],
+      [0.82, { ...BP, py: 0.11, bs: Math.PI * 6, ha: Math.PI, hb: Math.PI }],                      // aérien : il se referme en l'air
+      [0.9, { ...BP, bs: Math.PI * 8, ha: 0, hb: 0 }],                                              // et se rouvre dans la main
       [1, { bs: Math.PI * 8 }],
     ],
-    events: [[0.04, 'cloth'], [0.16, 'knifeFlip'], [0.26, 'knifeFlip'], [0.36, 'knifeFlip'], [0.46, 'knifeFlip'], [0.47, 'magIn'], [0.56, 'knifeFlip'], [0.68, 'knifeFlip'], [0.7, 'magIn']],
+    events: [[0.03, 'cloth'], [0.14, 'knifeFlip'], [0.22, 'knifeFlip'], [0.3, 'knifeFlip'], [0.38, 'knifeFlip'], [0.39, 'magIn'],
+      [0.46, 'knifeFlip'], [0.54, 'knifeFlip'], [0.62, 'knifeFlip'], [0.8, 'knifeFlip'], [0.88, 'knifeFlip'], [0.9, 'magIn']],
   },
   knifeInspectOld: {
     keys: [
@@ -334,6 +382,7 @@ Object.assign(ANIMS, {
     events: [[0.05, 'cloth'], [0.3, 'pumpBack'], [0.46, 'pumpForward'], [0.66, 'cloth']],
   },
 });
+// (le TILT irakien est défini plus haut)
 // Réarmement après un tir : quelle animation, à quel moment la douille sort
 const CYCLES = {
   kar98k: { anim: 'karCycle', eject: 0.4 },
@@ -341,7 +390,7 @@ const CYCLES = {
 };
 /** Animation de rechargement selon l'arme */
 function reloadAnim(weapon, empty) {
-  return { kar98k: 'kar', shotgun: 'shotgun', glock: empty ? 'glockEmpty' : 'glockTactical', mp5: empty ? 'mp5Empty' : 'akTactical' }[weapon] || (empty ? 'akEmpty' : 'akTactical');
+  return { kar98k: 'kar', shotgun: 'shotgun', glock: empty ? 'glockEmpty' : 'glockTactical', mp5: empty ? 'mp5Empty' : 'classicTactical' }[weapon] || (empty ? 'akEmpty' : 'akTactical');
 }
 const INSPECTS = { ak: 'akInspect', mp5: 'mp5Inspect', shotgun: 'shotgunInspect', kar98k: 'karInspect', glock: 'glockInspect' };
 // Motif de recul horizontal de l'AK et du MP5 (toujours le même : on peut apprendre à le contrôler)
@@ -569,7 +618,7 @@ export class WeaponSystem {
     // --- Inspection (touche Y) ---
     if (input.was('inspect') && !this.inspect && !this.reload && !this.draw) { this.inspect = { t: 0, fired: 0 }; }
     if (this.inspect) {
-      this.inspect.t += dt / INSPECT_TIME[this.current];
+      this.inspect.t += dt / (INSPECT_TIME[this.mk] || INSPECT_TIME[this.current]);
       const anim = ANIMS[INSPECTS[this.current] || (this.mk === 'butterfly' ? 'bflyInspect' : 'knifeInspect')];
       this.fireEvents(this.inspect, anim.events, this.inspect.t);
       // Annulée si on tire, vise ou recharge (on peut inspecter en courant)
@@ -863,6 +912,8 @@ export class WeaponSystem {
       if (ud.mag) {
         ud.mag.position.set(ud.magHome.x, ud.magHome.y + (k.magY || 0), ud.magHome.z);
         ud.mag.rotation.x = k.magR || 0;
+        ud.mag.visible = !((k.oh || 0) > 0.5);
+        if (ud.handMag) ud.handMag.visible = (k.nm || 0) > 0.5;
       }
       // Levier d'armement (AK)
       if (ud.charge) ud.charge.position.z = ud.chargeZ + (k.ch || 0) * (ud.chargeTravel || 0.1);
@@ -994,13 +1045,24 @@ export class WeaponSystem {
 // ---------------------------------------------------------------------
 const GLOVE = 0x5d4f40; // gants tactiques couleur sable
 const SKIN = 0xc99a72;
+const gloveMats = new Map();
+/** Matériau des gants selon le skin choisi (le style est lu par makeHand) */
+function gloveMaterial(id) {
+  const g = GLOVE_SKINS[id] || GLOVE_SKINS.default;
+  if (!gloveMats.has(g)) {
+    const m = g.style === 'bare' ? mat(g.color, { roughness: 0.62 }) : mat(g.color, { roughness: g.style === 'full' ? 0.55 : 0.78, map: g.style === 'full' ? null : fabricTex() });
+    m.userData = { gloveStyle: g.style, plate: g.plate, glow: g.glow };
+    gloveMats.set(g, m);
+  }
+  return gloveMats.get(g);
+}
 
 function armMaterials(skins = settings.skins) {
   // La manche prend la couleur de la tenue choisie dans le casier
   const suit = CHARACTER_SKINS[skins?.character]?.suit ?? 0x3a4560;
   return {
     sleeve: mat(suit, { map: fabricTex(), roughness: 0.95 }),
-    glove: mat(GLOVE, { roughness: 0.75 }),
+    glove: gloveMaterial(skins?.gloves),
     knuckle: mat(0x3e352b, { roughness: 0.6 }),
   };
 }
@@ -1246,6 +1308,14 @@ function buildAK(skin, optic, skins) {
   const port = new THREE.Object3D(); port.position.set(0.035, 0.02, -0.02); g.add(port); g.userData.ejectPort = port;
 
   rightGripHand(g, M, [0.032, -0.09, 0.128], [0.17, -0.36, 0.58], 0.35);
+  // Chargeur neuf tenu par la main droite pendant le rechargement irakien
+  const handMag = mag.clone();
+  const handAt = g.userData.rightHome.clone().add(new THREE.Vector3(0, -0.1, -0.2)); // pose "insertion"
+  handMag.position.copy(g.userData.magHome).sub(handAt).add(new THREE.Vector3(0, -0.03, 0));
+  handMag.rotation.x = 0.22;
+  handMag.visible = false;
+  g.userData.rightHand.add(handMag);
+  g.userData.handMag = handMag;
   leftSupportHand(g, M, [0, -0.062, -0.31], [-0.26, -0.44, 0.08]);
   muzzleFlash(g, -0.85);
   return g;

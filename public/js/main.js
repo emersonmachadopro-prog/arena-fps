@@ -305,6 +305,16 @@ let last = performance.now();
 
 function loop() {
   requestAnimationFrame(loop);
+  try { frame(); } catch (err) {
+    // Une erreur ne doit jamais figer le jeu : on la note et la boucle continue
+    if (!loop.errors) loop.errors = 0;
+    if (loop.errors++ < 5) console.error('Erreur dans la boucle de jeu :', err);
+    // Petit encadré pour pouvoir me faire une capture d'écran de l'erreur
+    const box = document.getElementById('err-box');
+    if (box && loop.errors === 1) { box.textContent = `Erreur : ${err?.message || err} — ${(err?.stack || '').split('\n')[1]?.trim() || ''}`; box.classList.remove('hidden'); setTimeout(() => box.classList.add('hidden'), 12000); }
+  }
+}
+function frame() {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.05); // évite les gros sauts si l'onglet a été mis en pause
   last = now;
@@ -362,3 +372,9 @@ loop();
 if (new URLSearchParams(location.search).has('debug')) {
   window.DEBUG = { ctx, input, showcase, localBody, world, get session() { return session; }, get net() { return net; }, startSolo };
 }
+
+// Erreurs hors de la boucle (réseau, sons…) : affichées aussi dans le petit encadré rouge
+addEventListener('error', (e) => {
+  const box = document.getElementById('err-box');
+  if (box && box.classList.contains('hidden')) { box.textContent = `Erreur : ${e.message} (${(e.filename || '').split('/').pop()}:${e.lineno})`; box.classList.remove('hidden'); setTimeout(() => box.classList.add('hidden'), 12000); }
+});

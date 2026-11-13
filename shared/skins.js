@@ -15,6 +15,16 @@ export const WEAPON_SKINS = {
   dragon:  { name: 'Dragon', body: 0x4a0d10, accent: 0xff4d2e, glow: true },
 };
 
+// Gants : style (mitaines, gants complets, mains nues) + couleurs
+export const GLOVE_SKINS = {
+  default: { name: 'Tactiques', style: 'fingerless', color: 0x5d4f40, plate: 0x3a3128 },
+  black:   { name: 'Noirs', style: 'full', color: 0x1d1e22, plate: 0x34363c },
+  leather: { name: 'Cuir', style: 'full', color: 0x6b4127, plate: 0x3d2414 },
+  bare:    { name: 'Mains nues', style: 'bare', color: 0xc99a72, plate: 0xc99a72 },
+  violet:  { name: 'Violet', style: 'full', color: 0x4c1d95, plate: 0xa855f7, glow: true },
+  arctic:  { name: 'Arctique', style: 'fingerless', color: 0xd8dee8, plate: 0x8796ab },
+};
+
 export const CHARACTER_SKINS = {
   default: { name: 'Standard', suit: 0x2c3244, vest: 0x1e2230 },
   arctic:  { name: 'Arctique', suit: 0xd5dee8, vest: 0x8796ab },
@@ -24,13 +34,14 @@ export const CHARACTER_SKINS = {
   royal:   { name: 'Royal', suit: 0x3b2c70, vest: 0x1e1642 },
 };
 
-export const DEFAULT_SKINS = { character: 'default', ak: 'default', mp5: 'default', shotgun: 'default', kar98k: 'default', glock: 'default', knife: 'default' };
+export const DEFAULT_SKINS = { character: 'default', gloves: 'default', ak: 'default', mp5: 'default', shotgun: 'default', kar98k: 'default', glock: 'default', knife: 'default' };
 
 /** Nettoie des skins reçus (le serveur n'accepte que des skins existants) */
 export function sanitizeSkins(s) {
   const out = { ...DEFAULT_SKINS };
   if (!s || typeof s !== 'object') return out;
   if (CHARACTER_SKINS[s.character]) out.character = s.character;
+  if (GLOVE_SKINS[s.gloves]) out.gloves = s.gloves;
   for (const w of ['ak', 'mp5', 'shotgun', 'kar98k', 'glock', 'knife']) if (WEAPON_SKINS[s[w]]) out[w] = s[w];
   return out;
 }

@@ -8,6 +8,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { MAP_BOXES, MAP_SIZE, SPAWNS } from '/shared/map.js';
 import { TEAMS } from '/shared/constants.js';
 import { settings, onSettingsChange } from './settings.js';
@@ -19,7 +20,7 @@ export function createWorld(container) {
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   renderer.setSize(innerWidth, innerHeight);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap; // ombres douces
+  renderer.shadowMap.type = THREE.PCFShadowMap;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; // rendu "cinéma", couleurs plus naturelles
   renderer.toneMappingExposure = 1.05;
   renderer.localClippingEnabled = true; // découpe des jambes du joueur (body.js)
@@ -74,6 +75,18 @@ export function createWorld(container) {
     const vmPass = new RenderPass(vmScene, vmCamera);
     vmPass.clear = false; vmPass.clearDepth = true; // l'arme par-dessus le monde
     composer.addPass(vmPass);
+    // Sécurité : un pixel invalide (NaN / infini) ferait devenir tout l'écran noir à travers le bloom.
+    // On les remplace et on limite la luminosité avant le bloom.
+    composer.addPass(new ShaderPass({
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(tDiffuse, vUv);
+          if (any(isnan(c)) || any(isinf(c))) c = vec4(0.0, 0.0, 0.0, 1.0);
+          gl_FragColor = vec4(clamp(c.rgb, 0.0, 32.0), clamp(c.a, 0.0, 1.0));
+        }`,
+    }));
     bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.32, 0.45, 0.88);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());
@@ -89,13 +102,25 @@ export function createWorld(container) {
     const size = q === 'low' ? 1024 : q === 'medium' ? 2048 : 4096;
     if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
     sun.shadow.mapSize.set(size, size);
-    renderer.shadowMap.type = q === 'low' ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
+    renderer.shadowMap.type = THREE.PCFShadowMap;
     scene.traverse(o => { if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { m.needsUpdate = true; }); });
     details.visible = q !== 'low';
     if (q === 'high' && !composer) makeComposer();
     if (composer) { composer.setPixelRatio(dpr); composer.setSize(innerWidth, innerHeight); }
   }
   applyQuality(settings.graphics || 'high');
+
+  // Si le navigateur perd le contexte WebGL (pilote graphique qui sature), on le récupère au lieu de rester sur un écran noir
+  renderer.domElement.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    console.warn('Contexte WebGL perdu : récupération…');
+    const msg = document.getElementById('gl-lost'); if (msg) msg.classList.remove('hidden');
+  });
+  renderer.domElement.addEventListener('webglcontextrestored', () => {
+    const msg = document.getElementById('gl-lost'); if (msg) msg.classList.add('hidden');
+    // on repasse en qualité moyenne pour éviter que ça recommence
+    if (settings.graphics === 'high') { settings.graphics = 'medium'; quality = null; applyQuality('medium'); }
+  });
 
   // ---- Redimensionnement et FOV ----
   function resize() {

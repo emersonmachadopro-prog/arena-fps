@@ -40,6 +40,7 @@ export class LocalBody {
       // Les jambes sont "coupées" proprement au milieu des cuisses (plan de découpe qui suit le joueur) :
       // on voit cuisses, genoux et bottes, sans le dessus arrondi des cuisses ni le bassin.
       this.clip = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+      this.torsoMeshes = [...keep];
       for (const m of [...this.legMeshes, ...keep]) { m.material = m.material.clone(); m.material.clippingPlanes = [this.clip]; m.material.side = THREE.DoubleSide; m.castShadow = true; } // DoubleSide : la coupe paraît pleine
       this.weapon = null;
     }
@@ -71,8 +72,14 @@ export class LocalBody {
     // En regardant ses pieds immobile, les pieds sont un peu devant (posture naturelle)
     const still = Math.max(0, 1 - av.speed / 2);
     for (const leg of av.legs) leg.rotation.x -= 0.12 * still * Math.min(1, down * 1.5);
-    // Le torse reste droit (il ne suit pas la tête) : on le voit en baissant les yeux
-    av.torso.rotation.x = Math.min(av.torso.rotation.x, 0.02);
+    // Le torse reste droit et n'est montré que quand on regarde vraiment ses pieds
+    // (sinon, en courant, on le voyait dépasser en bas de l'écran)
+    av.torso.rotation.x = 0;
+    const showTorso = down > 0.85 && !player.sprinting && !player.sliding;
+    if (showTorso !== this.torsoShown) {
+      this.torsoShown = showTorso;
+      for (const m of this.torsoMeshes) { m.material.colorWrite = showTorso; m.material.depthWrite = showTorso; }
+    }
     // Glissade : jambes tendues vers l'avant
     if (player.sliding) for (const [i, leg] of av.legs.entries()) { leg.rotation.x = -1.2 + i * 0.25; leg.userData.knee.rotation.x = 0.2; }
   }

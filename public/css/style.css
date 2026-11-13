@@ -428,3 +428,7 @@ kbd { font: 700 11px/1 "Segoe UI", system-ui, sans-serif; padding: 3px 6px; bord
 #elim-text b { color: #ff3b4e; font-weight: 900; margin-left: 6px; text-shadow: 0 0 14px rgba(255,59,78,.55), 0 2px 8px rgba(0,0,0,.9); }
 #elim-text.show { animation: elimIn 2.4s ease forwards; }
 @keyframes elimIn { 0% { opacity: 0; transform: translateX(-50%) translateY(10px); } 8% { opacity: 1; transform: translateX(-50%) translateY(0); } 82% { opacity: 1; } 100% { opacity: 0; } }
+
+#gl-lost { position: absolute; left: 50%; top: 40%; transform: translateX(-50%); padding: 12px 18px; border-radius: 10px; background: rgba(0,0,0,.75); border: 1px solid var(--line-strong); font-weight: 700; }
+#err-box { position: absolute; left: 12px; top: 12px; max-width: 60vw; padding: 8px 12px; border-radius: 8px; background: rgba(120,0,20,.85); font: 12px monospace; z-index: 5; }
+.grid-title { grid-column: 1 / -1; margin: 14px 0 2px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; font-size: 13px; color: var(--muted); }

@@ -4,7 +4,7 @@
 // =====================================================================
 import { ACTIONS, settings, saveSettings, resetSettings, keyLabel, activeLoadout } from './settings.js';
 import { TEAMS, WEAPONS, PRIMARIES, SECONDARIES, OPTICS, WEAPON_OPTICS, BOT_LEVELS, validOptic } from '/shared/constants.js';
-import { WEAPON_SKINS, CHARACTER_SKINS } from '/shared/skins.js';
+import { GLOVE_SKINS, WEAPON_SKINS, CHARACTER_SKINS } from '/shared/skins.js';
 import { escapeHtml } from './hud.js';
 import { sfx, initAudio, KILL_SOUND_PACKS } from './audio.js';
 import { drawCrosshair, CROSSHAIR_STYLES } from './crosshair.js';
@@ -148,6 +148,18 @@ export function opticSVG(optic, x, y) {
   return '';
 }
 
+function gloveSVG(g) {
+  const c = hex(g.color), p = hex(g.plate), skin = '#c99a72';
+  const tip = g.style === 'full' ? c : skin;
+  const base = g.style === 'bare' ? skin : c;
+  return `<svg viewBox="0 0 60 80">
+    ${[0, 1, 2, 3].map(i => `<rect x="${14 + i * 8.5}" y="${12 + (i === 0 || i === 3 ? 6 : 0)}" width="7.5" height="16" rx="3" fill="${base}"/><rect x="${14 + i * 8.5}" y="${8 + (i === 0 || i === 3 ? 6 : 0)}" width="7.5" height="9" rx="3.5" fill="${tip}"/>`).join('')}
+    <rect x="12" y="26" width="36" height="30" rx="7" fill="${base}"/>
+    <rect x="4" y="34" width="12" height="20" rx="5" fill="${base}" transform="rotate(-25 10 44)"/>
+    ${g.style !== 'bare' ? `<rect x="17" y="31" width="26" height="14" rx="4" fill="${p}"/><rect x="11" y="56" width="38" height="9" rx="3" fill="#1c1b19"/>` : ''}
+    <rect x="13" y="65" width="34" height="12" rx="3" fill="#2c3244"/></svg>`;
+}
+
 export function characterSVG(skinId = 'default') {
   const s = CHARACTER_SKINS[skinId] || CHARACTER_SKINS.default;
   const suit = hex(s.suit), vest = hex(s.vest);
@@ -184,6 +196,17 @@ export function initCharacterGrid(gridEl, onChange) {
       tile.className = 'skin-tile' + (settings.skins.character === id ? ' selected' : '');
       tile.innerHTML = characterSVG(id) + `<div class="sname">${skin.name}</div>`;
       tile.onclick = () => { settings.skins.character = id; saveSettings(); sfx.click(); render(); onChange('character'); };
+      gridEl.appendChild(tile);
+    }
+    // Gants (visibles en vue à la 1re personne)
+    const title = document.createElement('div');
+    title.className = 'grid-title'; title.textContent = '🧤 Gants';
+    gridEl.appendChild(title);
+    for (const [id, g] of Object.entries(GLOVE_SKINS)) {
+      const tile = document.createElement('div');
+      tile.className = 'skin-tile' + ((settings.skins.gloves || 'default') === id ? ' selected' : '');
+      tile.innerHTML = gloveSVG(g) + `<div class="sname">${g.name}</div>`;
+      tile.onclick = () => { settings.skins.gloves = id; saveSettings(); sfx.click(); render(); onChange('gloves'); };
       gridEl.appendChild(tile);
     }
   }
