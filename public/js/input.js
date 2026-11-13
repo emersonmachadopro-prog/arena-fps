@@ -24,6 +24,15 @@ export class Input {
     this.enabled = false;       // désactivé dans les menus
     this.onUnlock = null;       // appelé quand le joueur appuie sur Échap
 
+    // Zoom du navigateur bloqué partout (jeu ET menus) : Ctrl + molette, Ctrl +/-/0 (pavé num. compris)
+    addEventListener('wheel', (e) => { if (e.ctrlKey || e.metaKey) e.preventDefault(); }, { passive: false, capture: true });
+    addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && ['Equal', 'Minus', 'Digit0', 'NumpadAdd', 'NumpadSubtract', 'Numpad0'].includes(e.code)) e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && ['+', '-', '=', '0', '_'].includes(e.key)) e.preventDefault();
+    }, { capture: true });
+    // Pincement sur pavé tactile (Safari)
+    for (const ev of ['gesturestart', 'gesturechange']) addEventListener(ev, (e) => e.preventDefault(), { passive: false });
+
     addEventListener('keydown', (e) => {
       if (!this.enabled) return;
       // Bloque les raccourcis du navigateur pendant la partie

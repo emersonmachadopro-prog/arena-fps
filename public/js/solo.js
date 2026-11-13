@@ -159,7 +159,7 @@ export class SoloSession {
     const eye = { x: bot.pos.x, y: bot.pos.y + PLAYER.EYE, z: bot.pos.z };
     const pe = player.eye();
     const to = { x: pe.x - eye.x, y: pe.y - 0.25 - eye.y, z: pe.z - eye.z };
-    const dist = Math.hypot(to.x, to.y, to.z);
+    const dist = Math.max(1e-4, Math.hypot(to.x, to.y, to.z)); // jamais de division par 0 (→ NaN)
     const dir = { x: to.x / dist, y: to.y / dist, z: to.z / dist };
     const sees = player.alive && dist < 45 && raycastWorld(eye, dir, MAP_BOXES, dist) >= dist - 0.3;
 
@@ -170,7 +170,8 @@ export class SoloSession {
       const targetYaw = Math.atan2(-dir.x, -dir.z);
       let dy = Math.atan2(Math.sin(targetYaw - bot.yaw), Math.cos(targetYaw - bot.yaw));
       bot.yaw += dy * Math.min(1, dt * 8);
-      bot.pitch = Math.asin(dir.y);
+      bot.pitch = Math.asin(Math.max(-1, Math.min(1, dir.y))); // un arrondi > 1 donnerait NaN
+      if (!Number.isFinite(bot.yaw)) bot.yaw = 0;
       bot.strafeTimer -= dt;
       if (bot.strafeTimer <= 0) { bot.strafe = Math.random() < 0.5 ? -1 : 1; bot.strafeTimer = 0.6 + Math.random(); }
       wishX = Math.cos(bot.yaw) * bot.strafe;

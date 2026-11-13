@@ -66,25 +66,81 @@ function makeHand(glove, { curl = [-0.9, -1.1, -0.8], indexCurl = null, thumbCur
   rig.traverse((o) => {
     if (o.isMesh) { o.material = slots[o.material.name] || o.material; o.frustumCulled = false; }
   });
-  // Rotation d'un os autour d'un axe de la MAIN (les axes locaux des os dépendent de l'export)
+  // Pour chaque os : axes de la MAIN (x = plier, y = écarter) exprimés dans le repère de l'os au repos
   const rest = new Map();
   rig.traverse((o) => { if (o.isBone) rest.set(o, o.quaternion.clone()); });
   const restToHand = (b) => { const q = new THREE.Quaternion(); for (let o = b; o && o.isBone; o = o.parent) q.premultiply(rest.get(o)); return q; };
-  const turn = (name, axis, angle) => {
+  const bone = (name) => {
     const b = rig.getObjectByName(name);
-    if (!b || !angle) return;
-    const local = axis.clone().applyQuaternion(restToHand(b).invert());
-    b.quaternion.copy(rest.get(b)).multiply(new THREE.Quaternion().setFromAxisAngle(local, angle));
+    const inv = restToHand(b).invert();
+    return { b, q0: rest.get(b), ax: HAND_X.clone().applyQuaternion(inv), ay: HAND_Y.clone().applyQuaternion(inv) };
   };
-  ['index', 'middle', 'ring', 'pinky'].forEach((f, i) => {
-    const c = i === 0 && indexCurl ? indexCurl : curl;
-    for (let k = 0; k < 3; k++) turn(`${f}${k + 1}`, HAND_X, c[k]);
-  });
-  turn('thumb1', HAND_Y, thumbSpread);
-  turn('thumb2', HAND_X, thumbCurl * 0.5);
-  turn('thumb3', HAND_X, thumbCurl * 0.7);
+  const B = [];
+  for (const f of FINGERS) for (let k = 1; k <= 3; k++) B.push(bone(`${f}${k}`));
+  B.push(bone('thumb1'), bone('thumb2'), bone('thumb3'));
+  const qa = new THREE.Quaternion(), qb = new THREE.Quaternion();
+  const cur = new Float32Array(POSE_LEN);
+  /** Applique une pose (vecteur de 16 valeurs, cf. pose()) */
+  const apply = (p) => {
+    cur.set(p);
+    for (let i = 0; i < 12; i++) {
+      const { b, q0, ax, ay } = B[i];
+      b.quaternion.copy(q0);
+      if (i % 3 === 0) { // 1re phalange : écartement des doigts (index et auriculaire s'écartent le plus)
+        const s = p[15] * SPLAY[i / 3];
+        if (s) b.quaternion.multiply(qb.setFromAxisAngle(ay, s));
+      }
+      b.quaternion.multiply(qa.setFromAxisAngle(ax, p[i]));
+    }
+    B[12].b.quaternion.copy(B[12].q0).multiply(qa.setFromAxisAngle(B[12].ay, p[12]));
+    B[13].b.quaternion.copy(B[13].q0).multiply(qa.setFromAxisAngle(B[13].ax, p[13]));
+    B[14].b.quaternion.copy(B[14].q0).multiply(qa.setFromAxisAngle(B[14].ax, p[14]));
+  };
+  const tmp = new Float32Array(POSE_LEN);
+  hand.userData.pose = cur;
+  hand.userData.setPose = apply;
+  /** Va vers la pose voulue en douceur (les doigts ont un peu d'inertie) */
+  hand.userData.blendTo = (target, k) => {
+    for (let i = 0; i < POSE_LEN; i++) tmp[i] = cur[i] + (target[i] - cur[i]) * k;
+    apply(tmp);
+  };
+  hand.userData.rest = pose(curl, { index: indexCurl, thumbCurl, thumbSpread });
+  apply(hand.userData.rest);
   return hand;
 }
+
+// ---------------------------------------------------------------------
+//  Poses de main : 16 valeurs = [index ×3, majeur ×3, annulaire ×3, auriculaire ×3,
+//  pouce (écart, pli 2, pli 3), écartement des doigts]. Pli négatif = vers la paume.
+// ---------------------------------------------------------------------
+const FINGERS = ['index', 'middle', 'ring', 'pinky'];
+const POSE_LEN = 16;
+const SPLAY = [-1, -0.3, 0.3, 1];
+function pose(curl, { index = null, middle = null, ring = null, pinky = null, thumbCurl = -0.5, thumbSpread = -0.7, splay = 0 } = {}) {
+  const c3 = (c) => (c.length >= 3 ? c : [c[0], c[1], c[1] * 0.8]);
+  const p = new Float32Array(POSE_LEN);
+  [index, middle, ring, pinky].forEach((c, i) => p.set(c3(c || curl), i * 3));
+  p[12] = thumbSpread; p[13] = thumbCurl * 0.5; p[14] = thumbCurl * 0.7; p[15] = splay;
+  return p;
+}
+function mixPose(a, b, k, out = new Float32Array(POSE_LEN)) {
+  for (let i = 0; i < POSE_LEN; i++) out[i] = a[i] + (b[i] - a[i]) * k;
+  return out;
+}
+const HP = {
+  RIFLE: pose([-1.25, -1.05, -0.7], { index: [-0.3, -0.75, -0.5], thumbCurl: -0.55, thumbSpread: -0.4 }),
+  SUPPORT: pose([-1.15, -0.95, -0.6], { thumbCurl: -0.25 }),
+  PISTOL_SUP: pose([-1.35, -1.15, -0.8], { thumbCurl: -0.05, thumbSpread: 0.15 }),
+  KNIFE: pose([-1.45, -1.2, -0.8], { thumbCurl: -0.15, thumbSpread: -0.2 }),
+  OPEN: pose([-0.3, -0.35, -0.2], { thumbCurl: -0.15, thumbSpread: -0.75, splay: 0.08 }),
+  FLAT: pose([-0.08, -0.06, -0.04], { thumbCurl: 0.05, thumbSpread: -0.35, splay: 0.03 }),          // paume à plat (claque)
+  PINCH: pose([-1.55, -1.35, -0.9], { index: [-0.95, -0.85, -0.45], thumbCurl: -0.85, thumbSpread: -0.1 }), // pince pouce + index
+  MAG: pose([-0.95, -0.95, -0.6], { thumbCurl: -0.45, thumbSpread: -0.95 }),                          // tient un chargeur
+  CART: pose([-1.3, -1.2, -0.8], { index: [-0.75, -0.95, -0.55], thumbCurl: -0.95, thumbSpread: -0.2 }), // balle entre pouce et index
+  PUSH: pose([-1.35, -1.2, -0.85], { index: [-1.0, -1.0, -0.6], thumbCurl: 0.15, thumbSpread: -0.05 }),   // le pouce pousse
+  SLIDE: pose([-1.05, -1.15, -0.75], { thumbCurl: -0.7, thumbSpread: -0.55 }),                          // prise par-dessus
+  FIST: pose([-1.6, -1.5, -1.0], { thumbCurl: -0.9, thumbSpread: -0.1 }),
+};
 
 // Position de l'arme à l'écran sans viser (hip) + distance en visée (adsZ)
 const POSES = {
@@ -94,7 +150,8 @@ const POSES = {
   shotgun: { hip: [0.17, -0.16, -0.6], adsZ: { iron: -0.62, reddot: -0.5 } },
   glock:  { hip: [0.115, -0.135, -0.4], adsZ: { iron: -0.36 } },
 };
-const INSPECT_TIME = { butterfly: 4.2, ak: 3.0, mp5: 2.8, shotgun: 3.2, kar98k: 3.6, glock: 2.6, knife: 2.8 };
+const PI = Math.PI;
+const INSPECT_TIME = { butterfly: 6.0, ak: 3.0, mp5: 2.8, shotgun: 3.2, kar98k: 3.6, glock: 2.6, knife: 2.8 };
 
 const ease = (t) => t * t * (3 - 2 * t);
 const clamp01 = (t) => Math.max(0, Math.min(1, t));
@@ -105,17 +162,32 @@ const UP = new THREE.Vector3(0, 1, 0);
  * Retourne les valeurs interpolées en douceur au temps t.
  */
 function track(t, keys) {
-  if (t <= keys[0][0]) return keys[0][1];
+  const [a, b, k] = segment(t, keys);
+  const out = {};
+  for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const va = a[key], vb = b[key];
+    if (typeof va === 'string' || typeof vb === 'string') continue; // noms de poses de main : voir handPose()
+    out[key] = (va || 0) + ((vb || 0) - (va || 0)) * k;
+  }
+  return out;
+}
+/** Segment d'images clés en cours : [clé avant, clé après, avancement adouci 0..1]. lin: 1 = vitesse constante */
+function segment(t, keys) {
+  if (!(t > keys[0][0])) return [keys[0][1], keys[0][1], 0];
   for (let i = 0; i < keys.length - 1; i++) {
     const [t0, a] = keys[i], [t1, b] = keys[i + 1];
     if (t <= t1) {
-      const k = ease((t - t0) / (t1 - t0 || 1));
-      const out = {};
-      for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) out[key] = (a[key] || 0) + ((b[key] || 0) - (a[key] || 0)) * k;
-      return out;
+      const u = clamp01((t - t0) / (t1 - t0 || 1));
+      return [a, b, b.lin ? u : ease(u)];
     }
   }
-  return keys[keys.length - 1][1];
+  const last = keys[keys.length - 1][1];
+  return [last, last, 0];
+}
+/** Pose de main d'une animation : les images clés donnent un nom de pose (rf = main droite, lf = gauche) */
+function handPose(t, keys, field, fallback, out) {
+  const [a, b, k] = segment(t, keys);
+  return mixPose(HP[a[field]] || fallback, HP[b[field]] || fallback, k, out);
 }
 
 // ---------------------------------------------------------------------
@@ -124,8 +196,6 @@ function track(t, keys) {
 //  ch = levier d'armement tiré (0..1) · bolt = culasse ouverte (0..1)
 // ---------------------------------------------------------------------
 const TILT = { rz: 0.42, rx: 0.1, py: -0.03, px: -0.02 };
-const BP = { px: -0.09, py: 0.07, pz: 0.1, ry: -0.35, rz: 0.25, rx: 0.12 };   // papillon : pose d'inspection
-const BC = { px: -0.07, py: 0.1, pz: 0.12, ry: -0.15, rz: 0.0, rx: 1.2 };     // papillon : Chaplin (lame vers le haut)
 const ITILT = { rz: 0.45, rx: -0.06, ry: 0.12, py: 0.06, px: -0.08, pz: 0.02 }; // AK penchée pour bien voir le chargeur
 const ANIMS = {
   // A1 : il reste des balles → chargeur sorti, nouveau chargeur, claque
@@ -149,15 +219,18 @@ const ANIMS = {
   akTactical: {
     keys: [
       [0, {}],
-      [0.1, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1 }],             // la main va chercher le chargeur neuf
-      [0.22, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1 }],           // il remonte sous l'arme
-      [0.3, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1 }],            // TAC : il frappe la palette
-      [0.34, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02 }], // l'ancien bascule
-      [0.44, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0 }],      // et tombe
-      [0.47, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1 }],
-      [0.5, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0 }],        // le neuf s'accroche par l'avant
-      [0.6, { ...ITILT, rz: 0.36, rx: 0.1, rhx: 0.0, rhy: -0.085, rhz: -0.17, magY: 0, magR: 0 }],          // clac, verrouillé
-      [0.78, { rz: 0.08 }],
+      [0.1, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1, rf: 'MAG' }],             // la main va chercher le chargeur neuf
+      [0.22, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1, rf: 'MAG' }],           // il remonte sous l'arme
+      [0.28, { ...ITILT, rhx: 0.0, rhy: -0.135, rhz: -0.165, nm: 1, rf: 'MAG' }],         // élan…
+      [0.3, { ...ITILT, py: 0.008, rz: 0.47, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1, rf: 'MAG' }],   // TAC : il frappe la palette (l'arme encaisse)
+      [0.34, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02, rf: 'MAG' }], // l'ancien bascule
+      [0.44, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0, rf: 'MAG' }],      // et tombe
+      [0.47, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1, rf: 'MAG' }],
+      [0.5, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0, rf: 'FLAT' }],     // le neuf s'accroche par l'avant
+      [0.56, { ...ITILT, rhx: 0.0, rhy: -0.105, rhz: -0.16, magY: -0.02, magR: 0.18, rf: 'FLAT' }],               // la paume remonte sous le chargeur
+      [0.6, { ...ITILT, rz: 0.33, rx: 0.12, py: 0.01, rhx: 0.0, rhy: -0.08, rhz: -0.17, magY: 0, magR: 0, rf: 'FLAT' }], // CLAC, verrouillé (choc)
+      [0.66, { ...ITILT, rz: 0.4, rx: 0.08, rhx: 0.01, rhy: -0.09, rhz: -0.12, rf: 'OPEN' }],
+      [0.8, { rz: 0.06 }],
       [1, {}],
     ],
     events: [[0.04, 'cloth'], [0.31, 'magOut'], [0.6, 'magIn']],
@@ -165,22 +238,24 @@ const ANIMS = {
   akEmpty: {
     keys: [
       [0, {}],
-      [0.08, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1 }],
-      [0.17, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1 }],
-      [0.23, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1 }],
-      [0.26, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02 }],
-      [0.34, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0 }],
-      [0.36, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1 }],
-      [0.39, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0 }],
-      [0.47, { ...ITILT, rz: 0.36, rx: 0.1, rhx: 0.0, rhy: -0.085, rhz: -0.17, magY: 0, magR: 0 }],
+      [0.08, { ...ITILT, rhx: 0.03, rhy: -0.12, rhz: 0.0, nm: 1, rf: 'MAG' }],
+      [0.17, { ...ITILT, rhx: 0.01, rhy: -0.2, rhz: -0.14, nm: 1, rf: 'MAG' }],
+      [0.21, { ...ITILT, rhx: 0.0, rhy: -0.135, rhz: -0.165, nm: 1, rf: 'MAG' }],
+      [0.23, { ...ITILT, py: 0.008, rz: 0.47, rhx: 0.0, rhy: -0.11, rhz: -0.17, nm: 1, rf: 'MAG' }],
+      [0.26, { ...ITILT, rz: 0.36, rhx: 0.0, rhy: -0.12, rhz: -0.19, nm: 1, magR: 0.45, magY: -0.02, rf: 'MAG' }],
+      [0.34, { ...ITILT, rhx: 0.0, rhy: -0.12, rhz: -0.21, nm: 1, magR: 1.5, magY: -0.55, oh: 0, rf: 'MAG' }],
+      [0.36, { ...ITILT, rhx: 0.0, rhy: -0.11, rhz: -0.2, nm: 1, magY: -0.8, oh: 1, rf: 'MAG' }],
+      [0.39, { ...ITILT, rhx: 0.0, rhy: -0.1, rhz: -0.2, nm: 0, magY: -0.035, magR: 0.28, oh: 0, rf: 'FLAT' }],
+      [0.44, { ...ITILT, rhx: 0.0, rhy: -0.105, rhz: -0.16, magY: -0.02, magR: 0.18, rf: 'FLAT' }],
+      [0.47, { ...ITILT, rz: 0.33, rx: 0.12, py: 0.01, rhx: 0.0, rhy: -0.08, rhz: -0.17, magY: 0, magR: 0, rf: 'FLAT' }],
       // la main droite passe par-dessus l'arme et arme le levier (comme dans la vidéo)
-      [0.6, { rz: -0.22, ry: 0.08, rx: 0.04, rhx: 0.03, rhy: 0.125, rhz: -0.17 }],
-      [0.7, { rz: -0.26, ry: 0.1, rx: 0.06, rhx: 0.03, rhy: 0.125, rhz: -0.07, ch: 1, pz: 0.015 }],
-      [0.74, { rz: -0.2, ry: 0.08, rx: 0.1, rhx: 0.035, rhy: 0.135, rhz: -0.05, ch: 0 }],
+      [0.6, { rz: -0.22, ry: 0.08, rx: 0.04, rhx: 0.03, rhy: 0.125, rhz: -0.17, rf: 'SLIDE' }],
+      [0.7, { rz: -0.26, ry: 0.1, rx: 0.06, rhx: 0.03, rhy: 0.125, rhz: -0.07, ch: 1, pz: 0.015, rf: 'SLIDE' }],
+      [0.73, { rz: -0.2, ry: 0.08, rx: 0.1, py: 0.006, rhx: 0.035, rhy: 0.135, rhz: -0.05, ch: 0, rf: 'OPEN' }], // lâché : la culasse claque
       [0.86, { rz: 0.05 }],
       [1, {}],
     ],
-    events: [[0.03, 'cloth'], [0.24, 'magOut'], [0.47, 'magIn'], [0.68, 'chargeBack'], [0.73, 'chargeRelease']],
+    events: [[0.03, 'cloth'], [0.24, 'magOut'], [0.47, 'magIn'], [0.68, 'chargeBack'], [0.72, 'chargeRelease']],
   },
   akEmptyOld: {
     keys: [
@@ -203,10 +278,10 @@ const ANIMS = {
     keys: [
       [0, {}],
       [0.16, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.65, rz: -0.25, rx: 0.08 }],             // on montre le côté droit
-      [0.28, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.7, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.33 }],
-      [0.4, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.72, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.38, ch: 0.45 }], // on entrouvre
-      [0.62, { px: -0.07, py: 0.055, pz: 0.13, ry: 0.8, rz: -0.18, rx: 0.12, hx: 0.085, hy: 0.055, hz: 0.38, ch: 0.45 }], // on regarde
-      [0.7, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.7, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.33 }],
+      [0.28, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.7, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.33, lf: 'PINCH' }],
+      [0.4, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.72, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.38, ch: 0.45, lf: 'PINCH' }], // on entrouvre
+      [0.62, { px: -0.07, py: 0.055, pz: 0.13, ry: 0.8, rz: -0.18, rx: 0.12, hx: 0.085, hy: 0.055, hz: 0.38, ch: 0.45, lf: 'PINCH' }], // on regarde
+      [0.7, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.7, rz: -0.22, rx: 0.08, hx: 0.085, hy: 0.055, hz: 0.33, lf: 'OPEN' }],
       [0.82, { px: -0.03, py: 0.02, pz: 0.05, ry: 0.3, rz: -0.1 }],
       [1, {}],
     ],
@@ -218,12 +293,12 @@ const ANIMS = {
       [0, {}],
       [0.14, { px: -0.1, py: 0.05, pz: 0.14, ry: -0.9, rz: 0.25 }],
       [0.3, { px: -0.1, py: 0.05, pz: 0.14, ry: -1.0, rz: 0.22 }],
-      [0.4, { px: -0.05, py: 0.06, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15 }],
-      [0.46, { px: -0.05, py: 0.06, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15, bolt: 1 }],
-      [0.6, { px: -0.05, py: 0.065, pz: 0.13, ry: 0.45, rz: -0.38, rx: 0.18, bolt: 1 }],
-      [0.66, { px: -0.05, py: 0.06, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15 }],
-      [0.74, { px: -0.03, py: 0.04, pz: 0.08, ry: 0.15, rz: -0.12, hx: 0.01, hy: 0.15, hz: 0.25 }], // main sur la lunette
-      [0.88, { px: -0.03, py: 0.04, pz: 0.08, ry: 0.15, rz: -0.12, hx: 0.01, hy: 0.15, hz: 0.42 }], // caresse
+      [0.37, { px: -0.05, py: 0.06, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15, rhw: 1 }],              // la main droite va sur le verrou
+      [0.46, { px: -0.05, py: 0.06, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15, bolt: 1, rhw: 1 }],
+      [0.6, { px: -0.05, py: 0.065, pz: 0.13, ry: 0.45, rz: -0.38, rx: 0.18, bolt: 1, rhw: 1 }],
+      [0.66, { px: -0.05, py: 0.058, pz: 0.12, ry: 0.4, rz: -0.35, rx: 0.15, rhw: 1 }],
+      [0.74, { px: -0.03, py: 0.04, pz: 0.08, ry: 0.15, rz: -0.12, hx: 0.01, hy: 0.15, hz: 0.25, lf: 'OPEN' }], // main sur la lunette
+      [0.88, { px: -0.03, py: 0.04, pz: 0.08, ry: 0.15, rz: -0.12, hx: 0.01, hy: 0.15, hz: 0.42, lf: 'OPEN' }], // caresse
       [1, {}],
     ],
     events: [[0.05, 'cloth'], [0.42, 'boltUp'], [0.45, 'boltBack'], [0.62, 'boltForward'], [0.65, 'boltDown'], [0.76, 'cloth']],
@@ -233,52 +308,79 @@ const ANIMS = {
     keys: [
       [0, {}],
       [0.2, { px: -0.1, py: 0.06, pz: 0.1, ry: -0.9, rz: 0.5, rx: -0.2 }],
-      [0.45, { px: -0.1, py: 0.06, pz: 0.1, ry: -0.95, rz: 0.5, rx: -0.2 }],
-      [0.62, { px: -0.08, py: 0.06, pz: 0.1, ry: 0.4, rz: -0.6, rx: 0.2 }],
-      [0.85, { px: -0.08, py: 0.06, pz: 0.1, ry: 0.42, rz: -0.6, rx: 0.2 }],
-      [1, {}],
+      [0.4, { px: -0.1, py: 0.06, pz: 0.1, ry: -0.95, rz: 0.5, rx: -0.2 }],
+      [0.46, { px: -0.09, py: 0.065, pz: 0.1, ry: -0.3, rz: 0.0, fo: 0.6 }],                       // les doigts se desserrent…
+      [0.58, { px: -0.08, py: 0.06, pz: 0.1, ry: 0.4, rz: -0.6, rx: 0.2, fo: 0.6, kspin: 2 * PI }],  // …la lame tourne dans la main
+      [0.64, { px: -0.08, py: 0.055, pz: 0.1, ry: 0.4, rz: -0.6, rx: 0.2, kspin: 2 * PI }],          // et on resserre (petit choc)
+      [0.85, { px: -0.08, py: 0.06, pz: 0.1, ry: 0.42, rz: -0.6, rx: 0.2, kspin: 2 * PI }],
+      [1, { kspin: 2 * PI }],
     ],
-    events: [[0.05, 'cloth'], [0.55, 'cloth']],
+    events: [[0.05, 'cloth'], [0.5, 'knifeFlip'], [0.62, 'cloth']],
   },
   knifeDraw: {
     keys: [[0, { py: -0.2, rx: -0.6 }], [0.6, { py: 0.01 }], [1, {}]],
     events: [[0.05, 'cloth']],
   },
   // ---- Couteau papillon ----
-  // bs = rotation autour de l'annulaire, ha / hb = ouverture des deux manches (0 = ouvert, π = fermé)
+  // Canaux : bH / bR / bC = orientation du couteau (H = tenu dans le poing lame en l'air,
+  // R = à plat entre les doigts pour les rollovers, C = "Chaplin" pendu au bout de l'annulaire).
+  // kx/ky/kz = déplacement des goupilles depuis le poing · rl = 1 : le couteau roule autour des doigts,
+  // rg = position dans les espaces entre les doigts (0 = pouce/index … 4 = sous l'auriculaire).
+  // sz = rotation autour de l'axe des doigts · fx = salto (aérien) · fs = bascule autour des goupilles.
+  // ha / hb = angle des deux manches (0 = ouvert, π = refermés sur la lame).
+  // fo = ouverture des doigts (0 = poing, 1 = ouverts) · ce = Chaplin (annulaire tendu, les autres repliés).
+  // Ouverture classique : on tient le manche "sûr", la lame et le manche "mordant" font le tour,
+  // puis le manche mordant revient claquer dans la paume.
   bflyDraw: {
     keys: [
-      [0, { py: -0.2, rx: -0.5, ha: Math.PI, hb: Math.PI }],
-      [0.2, { py: 0, ha: Math.PI, hb: Math.PI }],
-      [0.4, { ha: 0, hb: Math.PI, bs: Math.PI }],             // le manche "sûr" s'ouvre en tournant
-      [0.62, { ha: 0, hb: 0, bs: Math.PI * 2 }],               // puis l'autre : lame sortie
-      [0.8, { bs: Math.PI * 2, rz: 0.1 }],
-      [1, { bs: Math.PI * 2 }],
+      [0, { py: -0.2, rx: -0.5, fs: PI, ha: PI, hb: PI }],
+      [0.22, { py: 0.01, fs: PI, ha: PI, hb: PI }],
+      [0.3, { rz: -0.16, rx: 0.05, fs: PI, ha: PI, hb: PI }],                 // on arme le poignet
+      [0.5, { rz: 0.28, fs: PI * 2, ha: 0, hb: PI, fo: 0.15 }],               // coup de poignet : la lame sort
+      [0.56, { rz: 0.24, fs: PI * 2, ha: 0, hb: PI, fo: 0.3 }],
+      [0.64, { rz: -0.2, fs: PI * 2, ha: 0, hb: PI * 0.7, fo: 0.3 }],         // contre-coup…
+      [0.76, { rz: 0.05, py: -0.008, fs: PI * 2, ha: 0, hb: 0 }],            // …le manche mordant claque dans la paume
+      [0.84, { rz: -0.02, py: 0.003, fs: PI * 2 }],
+      [1, { fs: PI * 2 }],
     ],
-    events: [[0.05, 'cloth'], [0.36, 'knifeFlip'], [0.58, 'knifeFlip'], [0.64, 'magIn']],
+    events: [[0.05, 'cloth'], [0.46, 'knifeFlip'], [0.74, 'knifeFlip'], [0.77, 'magIn']],
   },
-  // Inspection du papillon (inspirée de ta vidéo "Chaplin") :
-  // rollovers autour de l'annulaire → le couteau se lève, lame vers le haut, pincé aux goupilles,
-  // manches écartés en T qui se balancent comme un pendule → aérien qui le referme puis le rouvre.
+  // Inspection : rollovers d'un doigt à l'autre (aller-retour), fan, aérien,
+  // puis "Chaplin" pendu à l'annulaire qui se balance et fait un tour complet, et on referme / rouvre.
   bflyInspect: {
-    keys: [
-      [0, {}],
-      [0.07, { ...BP }],
-      [0.15, { ...BP, bs: Math.PI, hb: Math.PI }],
-      [0.23, { ...BP, bs: Math.PI * 2, ha: Math.PI, hb: Math.PI }],
-      [0.31, { ...BP, bs: Math.PI * 3, ha: 0, hb: Math.PI }],
-      [0.39, { ...BP, bs: Math.PI * 4, ha: 0, hb: 0 }],
-      [0.47, { ...BC, bs: Math.PI * 4, ha: Math.PI / 2, hb: Math.PI / 2 }],                          // Chaplin !
-      [0.55, { ...BC, rz: 0.28, bs: Math.PI * 4, ha: Math.PI / 2 + 0.35, hb: Math.PI / 2 - 0.3 }],  // balancier…
-      [0.63, { ...BC, rz: -0.22, bs: Math.PI * 4, ha: Math.PI / 2 - 0.3, hb: Math.PI / 2 + 0.35 }],
-      [0.7, { ...BC, rz: 0.06, bs: Math.PI * 4, ha: Math.PI / 2 + 0.08, hb: Math.PI / 2 - 0.08 }],
-      [0.74, { ...BC, bs: Math.PI * 4, ha: Math.PI / 2, hb: Math.PI / 2 }],
-      [0.82, { ...BP, py: 0.11, bs: Math.PI * 6, ha: Math.PI, hb: Math.PI }],                      // aérien : il se referme en l'air
-      [0.9, { ...BP, bs: Math.PI * 8, ha: 0, hb: 0 }],                                              // et se rouvre dans la main
-      [1, { bs: Math.PI * 8 }],
-    ],
-    events: [[0.03, 'cloth'], [0.14, 'knifeFlip'], [0.22, 'knifeFlip'], [0.3, 'knifeFlip'], [0.38, 'knifeFlip'], [0.39, 'magIn'],
-      [0.46, 'knifeFlip'], [0.54, 'knifeFlip'], [0.62, 'knifeFlip'], [0.8, 'knifeFlip'], [0.88, 'knifeFlip'], [0.9, 'magIn']],
+    keys: (() => {
+      const S = { px: -0.11, py: 0.06, pz: 0.05, rx: 0.85, ry: -0.25, rz: 2.0, fo: 1 };   // main levée, doigts vers la gauche
+      const C = { px: -0.13, py: 0.06, pz: -0.02, rx: 0.45, ry: -1.0, rz: 2.0 };         // annulaire pointé vers l'avant-gauche
+      const R = (rg, o = {}) => ({ ...S, bR: 1, rl: 1, rg, ...o });
+      // Chaplin : sz décalé d'un demi-tour pour avoir la lame en haut, manches en T
+      const CH = (o = {}) => ({ ...C, bC: 1, kx: 0.022, ky: -0.049, kz: -0.056, ce: 1, fx: 4 * PI, ha: PI / 2, hb: PI / 2, ...o, sz: PI + (o.sz ?? -6 * PI) });
+      return [
+        [0, {}],
+        [0.05, { ...S, fo: 0.25 }],
+        [0.1, R(0)],                                    // le couteau glisse entre le pouce et l'index
+        [0.14, R(1)], [0.18, R(2)], [0.22, R(3)], [0.26, R(4)],     // rollovers : index → auriculaire
+        [0.3, R(3)], [0.34, R(2)], [0.38, R(1)], [0.42, R(0)],      // et retour
+        [0.46, R(0, { sz: -2 * PI, ha: 0.4, hb: 0.4, lin: 1 })],     // fan : il tourne autour des goupilles
+        [0.5, R(0, { sz: -4 * PI, ha: 0.4, hb: 0.4, lin: 1 })],
+        [0.54, R(0, { sz: -6 * PI })],
+        [0.56, { ...S, bR: 1, kx: 0.022, ky: -0.004, kz: -0.018, sz: -6 * PI }],                       // il quitte les doigts…
+        [0.62, { ...S, bR: 0.5, bH: 0.5, kx: -0.02, ky: -0.16, kz: -0.03, sz: -6 * PI, fx: 2 * PI, ha: 1.3, hb: 0.9, fo: 1.1 }], // aérien (vers le haut de l'écran)
+        [0.68, { ...S, py: S.py - 0.028, bH: 1, sz: -6 * PI, fx: 4 * PI, fo: 0 }],                    // rattrapé (la main encaisse)
+        [0.71, { ...S, bH: 1, sz: -6 * PI, fx: 4 * PI, fo: 0 }],
+        [0.75, CH()],                                                                                   // Chaplin sur l'annulaire
+        [0.79, CH({ sz: -6 * PI + 0.55, ha: PI / 2 + 0.35, hb: PI / 2 - 0.3 })],                       // balancier…
+        [0.83, CH({ sz: -6 * PI - 0.5, ha: PI / 2 - 0.3, hb: PI / 2 + 0.35 })],
+        [0.86, CH({ sz: -6 * PI + 0.25 })],
+        [0.9, CH({ sz: -8 * PI, lin: 1 })],                                                            // un tour complet autour du doigt
+        [0.92, CH({ sz: -8 * PI })],
+        [0.955, { bH: 1, sz: -8 * PI, fx: 4 * PI, ha: PI, hb: PI }],                                   // on referme…
+        [0.985, { bH: 1, sz: -8 * PI, fx: 4 * PI, py: -0.006 }],                                       // …et on rouvre d'un coup sec
+        [1, { sz: -8 * PI, fx: 4 * PI }],
+      ];
+    })(),
+    events: [[0.03, 'cloth'], [0.13, 'knifeFlip'], [0.17, 'knifeFlip'], [0.21, 'knifeFlip'], [0.25, 'knifeFlip'],
+      [0.29, 'knifeFlip'], [0.33, 'knifeFlip'], [0.37, 'knifeFlip'], [0.41, 'knifeFlip'], [0.45, 'knifeFlip'], [0.49, 'knifeFlip'], [0.53, 'knifeFlip'],
+      [0.6, 'knifeFlip'], [0.68, 'magIn'], [0.78, 'knifeFlip'], [0.82, 'knifeFlip'], [0.89, 'knifeFlip'], [0.95, 'knifeFlip'], [0.98, 'magIn']],
   },
   knifeInspectOld: {
     keys: [
@@ -307,9 +409,9 @@ const ANIMS = {
   akRack: {
     keys: [
       [0, { py: -0.15, rx: -0.4 }],
-      [0.25, { rz: 0.15, ry: 0.15, hx: 0.085, hy: 0.055, hz: 0.33 }],
-      [0.45, { rz: 0.14, ry: 0.15, pz: 0.02, hx: 0.085, hy: 0.055, hz: 0.43, ch: 1 }],
-      [0.55, { rz: 0.12, ry: 0.15, rx: 0.06, hx: 0.085, hy: 0.06, hz: 0.36 }],
+      [0.25, { rz: 0.15, ry: 0.15, hx: 0.085, hy: 0.055, hz: 0.33, lf: 'PINCH' }],
+      [0.45, { rz: 0.14, ry: 0.15, pz: 0.02, hx: 0.085, hy: 0.055, hz: 0.43, ch: 1, lf: 'PINCH' }],
+      [0.55, { rz: 0.12, ry: 0.15, rx: 0.06, py: 0.005, hx: 0.085, hy: 0.06, hz: 0.36, lf: 'OPEN' }],
       [1, {}],
     ],
     events: [[0.02, 'cloth'], [0.4, 'chargeBack'], [0.5, 'chargeRelease']],
@@ -334,10 +436,10 @@ Object.assign(ANIMS, {
       [0, {}],
       [0.14, { ...GTILT, magY: -0.02 }],
       [0.24, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.06 }],                      // le chargeur vide tombe
-      [0.36, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.32, hx: -0.02, hz: 0.02 }], // la main gauche va chercher un chargeur
-      [0.48, { ...GTILT, magY: -0.16, magR: 0.12, hy: -0.2, hx: 0.03, hz: -0.01 }], // elle l'amène sous la poignée
-      [0.6, { ...GTILT, magY: -0.06, magR: 0.02, hy: -0.1, hx: 0.035, hz: -0.01 }], // on l'engage…
-      [0.68, { ...GTILT, magY: 0, hy: -0.055, hx: 0.035, hz: -0.01, rx: 0.4 }],     // …et on le claque dedans
+      [0.36, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.32, hx: -0.02, hz: 0.02, lf: 'MAG' }], // la main gauche va chercher un chargeur
+      [0.48, { ...GTILT, magY: -0.16, magR: 0.12, hy: -0.2, hx: 0.03, hz: -0.01, lf: 'MAG' }], // elle l'amène sous la poignée
+      [0.6, { ...GTILT, magY: -0.06, magR: 0.02, hy: -0.1, hx: 0.035, hz: -0.01, lf: 'MAG' }], // on l'engage…
+      [0.68, { ...GTILT, magY: 0, hy: -0.055, hx: 0.035, hz: -0.01, rx: 0.4, lf: 'FLAT' }],     // …et on le claque dedans
       [0.8, { rz: 0.2, rx: 0.06, py: -0.01 }],
       [1, {}],
     ],
@@ -348,16 +450,16 @@ Object.assign(ANIMS, {
       [0, { sl: 1 }],
       [0.1, { ...GTILT, magY: -0.02, sl: 1 }],
       [0.2, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.06, sl: 1 }],
-      [0.3, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.32, hx: -0.02, hz: 0.02, sl: 1 }],
-      [0.4, { ...GTILT, magY: -0.16, magR: 0.12, hy: -0.2, hx: 0.03, hz: -0.01, sl: 1 }],
-      [0.5, { ...GTILT, magY: -0.06, magR: 0.02, hy: -0.1, hx: 0.035, hz: -0.01, sl: 1 }],
-      [0.56, { ...GTILT, magY: 0, hy: -0.055, hx: 0.035, hz: -0.01, rx: 0.4, sl: 1 }],
+      [0.3, { ...GTILT, magY: -0.3, magR: 0.25, hy: -0.32, hx: -0.02, hz: 0.02, sl: 1, lf: 'MAG' }],
+      [0.4, { ...GTILT, magY: -0.16, magR: 0.12, hy: -0.2, hx: 0.03, hz: -0.01, sl: 1, lf: 'MAG' }],
+      [0.5, { ...GTILT, magY: -0.06, magR: 0.02, hy: -0.1, hx: 0.035, hz: -0.01, sl: 1, lf: 'MAG' }],
+      [0.56, { ...GTILT, magY: 0, hy: -0.055, hx: 0.035, hz: -0.01, rx: 0.4, sl: 1, lf: 'FLAT' }],
       // la main gauche passe par-dessus et attrape l'arrière de la culasse…
-      [0.68, { rz: 0.15, ry: -0.3, rx: 0.08, px: -0.07, py: 0.02, hx: 0.03, hy: 0.1, hz: 0.0, sl: 1 }],
+      [0.68, { rz: 0.15, ry: -0.3, rx: 0.08, px: -0.07, py: 0.02, hx: 0.03, hy: 0.1, hz: 0.0, sl: 1, lf: 'SLIDE' }],
       // …la tire en arrière…
-      [0.76, { rz: 0.15, ry: -0.32, rx: 0.08, px: -0.07, py: 0.02, hx: 0.03, hy: 0.1, hz: 0.06, sl: 1.15 }],
+      [0.76, { rz: 0.15, ry: -0.32, rx: 0.08, px: -0.07, py: 0.02, hx: 0.03, hy: 0.1, hz: 0.06, sl: 1.15, lf: 'SLIDE' }],
       // …et la lâche : elle repart en avant et chambre une balle
-      [0.8, { rz: 0.1, ry: -0.25, rx: 0.12, hx: 0.03, hy: 0.12, hz: 0.09, sl: 0 }],
+      [0.8, { rz: 0.1, ry: -0.25, rx: 0.12, hx: 0.03, hy: 0.12, hz: 0.09, sl: 0, lf: 'OPEN' }],
       [0.9, { rz: 0.04, hx: 0.01, hy: 0.04, hz: 0.03 }],
       [1, {}],
     ],
@@ -384,14 +486,18 @@ Object.assign(ANIMS, {
   karCycle: {
     keys: [
       [0, {}],
-      [0.14, { rhw: 1, rz: -0.05 }],                          // la main droite va sur la boule du levier
-      [0.26, { rhw: 1, bolt: 0.5, rz: -0.1 }],                // lève
-      [0.4, { rhw: 1, bolt: 1, rz: -0.2, rx: -0.06, pz: 0.03 }],  // tire en arrière (la douille sort)
-      [0.54, { rhw: 1, bolt: 0.5, rz: -0.1 }],                // repousse
-      [0.64, { rhw: 1, bolt: 0, rz: -0.05 }],                 // rabaisse
-      [0.82, {}],                                              // retour sur la poignée
+      [0.06, { rhw: 0.35, rz: 0.015, py: -0.004 }],                       // anticipation : l'arme se pose
+      [0.14, { rhw: 1, rz: -0.05 }],                                       // les doigts attrapent la boule
+      [0.22, { rhw: 1, bolt: 0.5, rz: -0.11, rx: 0.01 }],                  // lève le levier
+      [0.36, { rhw: 1, bolt: 1, rz: -0.2, rx: -0.06, pz: 0.035 }],         // tire en arrière : la douille sort
+      [0.43, { rhw: 1, bolt: 1, rz: -0.21, rx: -0.05, pz: 0.03 }],         // (on voit la balle suivante)
+      [0.55, { rhw: 1, bolt: 0.5, rz: -0.1, pz: -0.004 }],                 // pousse : la balle part dans la chambre
+      [0.6, { rhw: 1, bolt: 0.5, rz: -0.09, pz: -0.009, py: 0.003 }],      // butée (petit choc vers l'avant)
+      [0.67, { rhw: 1, bolt: 0, rz: -0.04, rx: 0.02, py: -0.004 }],        // rabaisse d'un coup sec
+      [0.84, { rz: 0.008 }],                                               // la main revient sur la poignée
+      [1, {}],
     ],
-    events: [[0.22, 'boltUp'], [0.5, 'boltForward']],
+    events: [[0.2, 'boltUp'], [0.53, 'boltForward'], [0.65, 'boltDown']],
   },
 });
 
@@ -401,15 +507,15 @@ Object.assign(ANIMS, {
   mp5Empty: {
     keys: [
       [0, {}],
-      [0.08, { rz: -0.12, ry: 0.1, hx: -0.035, hy: 0.075, hz: 0.06 }],                 // main gauche sur le levier
-      [0.16, { rz: -0.14, ry: 0.12, hx: -0.035, hy: 0.075, hz: 0.16, ch: 1 }],          // levier tiré et bloqué en haut
+      [0.08, { rz: -0.12, ry: 0.1, hx: -0.035, hy: 0.075, hz: 0.06, lf: 'PINCH' }],                 // main gauche sur le levier
+      [0.16, { rz: -0.14, ry: 0.12, hx: -0.035, hy: 0.075, hz: 0.16, ch: 1, lf: 'PINCH' }],          // levier tiré et bloqué en haut
       [0.24, { ...MTILT, hy: -0.06, hz: 0.12, ch: 1, magY: -0.02 }],
-      [0.36, { ...MTILT, hy: -0.48, hz: 0.12, ch: 1, magY: -0.4, magR: 0.4 }],
-      [0.48, { ...MTILT, hy: -0.48, hz: 0.12, ch: 1, magY: -0.4, magR: 0.4 }],
-      [0.62, { ...MTILT, hy: -0.08, hz: 0.12, ch: 1, magY: -0.03 }],
-      [0.68, { rz: 0.24, rx: 0.05, py: -0.01, hy: -0.05, hz: 0.12, ch: 1 }],
-      [0.76, { rz: -0.1, ry: 0.12, hx: -0.035, hy: 0.09, hz: 0.18, ch: 1 }],           // la main remonte...
-      [0.8, { rz: -0.18, ry: 0.14, rx: 0.05, hx: -0.035, hy: 0.075, hz: 0.12, ch: 0 }],  // ...et claque le levier !
+      [0.36, { ...MTILT, hy: -0.48, hz: 0.12, ch: 1, magY: -0.4, magR: 0.4, lf: 'MAG' }],
+      [0.48, { ...MTILT, hy: -0.48, hz: 0.12, ch: 1, magY: -0.4, magR: 0.4, lf: 'MAG' }],
+      [0.62, { ...MTILT, hy: -0.08, hz: 0.12, ch: 1, magY: -0.03, lf: 'MAG' }],
+      [0.68, { rz: 0.24, rx: 0.05, py: -0.01, hy: -0.05, hz: 0.12, ch: 1, lf: 'FLAT' }],
+      [0.76, { rz: -0.1, ry: 0.12, hx: -0.035, hy: 0.09, hz: 0.18, ch: 1, lf: 'FLAT' }],           // la main remonte...
+      [0.8, { rz: -0.18, ry: 0.14, rx: 0.05, hx: -0.035, hy: 0.075, hz: 0.12, ch: 0, lf: 'FLAT' }],  // ...et claque le levier !
       [0.9, { rz: -0.05, hx: -0.02, hy: 0.04, hz: 0.06 }],
       [1, {}],
     ],
@@ -420,9 +526,9 @@ Object.assign(ANIMS, {
       [0, {}],
       [0.18, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.7, rz: -0.25, rx: 0.08 }],
       [0.4, { px: -0.07, py: 0.05, pz: 0.12, ry: 0.72, rz: -0.22, rx: 0.08 }],
-      [0.55, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.6, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.06 }],
-      [0.66, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.62, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.11, ch: 0.5 }],   // on vérifie la chambre
-      [0.78, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.6, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.06, ch: 0 }],
+      [0.55, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.6, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.06, lf: 'PINCH' }],
+      [0.66, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.62, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.11, ch: 0.5, lf: 'PINCH' }],   // on vérifie la chambre
+      [0.78, { px: -0.05, py: 0.06, pz: 0.12, ry: -0.6, rz: 0.3, hx: -0.035, hy: 0.075, hz: 0.06, ch: 0, lf: 'OPEN' }],
       [1, {}],
     ],
     events: [[0.05, 'cloth'], [0.62, 'chargeBack'], [0.74, 'chargeRelease']],
@@ -454,7 +560,7 @@ Object.assign(ANIMS, {
 // (le TILT irakien est défini plus haut)
 // Réarmement après un tir : quelle animation, à quel moment la douille sort
 const CYCLES = {
-  kar98k: { anim: 'karCycle', eject: 0.4 },
+  kar98k: { anim: 'karCycle', eject: 0.35 },
   shotgun: { anim: 'pumpCycle', eject: 0.3 },
 };
 /** Animation de rechargement selon l'arme */
@@ -465,7 +571,7 @@ const INSPECTS = { ak: 'akInspect', mp5: 'mp5Inspect', shotgun: 'shotgunInspect'
 // Motif de recul horizontal de l'AK et du MP5 (toujours le même : on peut apprendre à le contrôler)
 const RECOIL_PATTERN = [0, 0, 0.1, 0.2, 0.15, -0.1, -0.35, -0.5, -0.4, -0.1, 0.25, 0.5, 0.6, 0.45, 0.1, -0.25, -0.45, -0.3, 0, 0.3];
 
-const DRAW_TIME = { knifeDraw: 0.75, akRack: 1.0, karRack: 1.0, glockDraw: 0.45 };
+const DRAW_TIME = { knifeDraw: 0.75, bflyDraw: 1.05, akRack: 1.0, karRack: 1.0, glockDraw: 0.45 };
 // La main droite manœuvre aussi la culasse pendant l'armement du Kar
 ANIMS.karRack.keys = ANIMS.karCycle.keys.map(([t, k]) => [t, { ...k, rz: (k.rz || 0) - 0.08 }]);
 ANIMS.karRack.keys[0] = [0, { py: -0.15, rx: -0.4 }];
@@ -484,7 +590,12 @@ export class WeaponSystem {
     this.optic = 'iron';
     this.ammo = {};
     this.lookDown = 0;
-    this.reset(settings.loadouts?.[settings.activeLoadout]);  }
+    this.reset(settings.loadouts?.[settings.activeLoadout]);
+    if (location.search.includes('animdebug')) { // accès aux animations pour les tests (?animdebug)
+      window.__ws = this;
+      window.__wsDbg = { ANIMS, HP, BFLY_POS, BFLY_ROT, BFLY_HOLD };
+    }
+  }
 
   /** (Re)construit les modèles avec les skins + le viseur choisis */
   rebuild(skins = settings.skins) {
@@ -556,7 +667,9 @@ export class WeaponSystem {
   get reloading() { return !!this.reload; }
   get scoped() { return !!this.overlay; }
   get currentOptic() { return this.isGun ? (this.current === this.primary ? this.optic : 'iron') : null; }
-  get busy() { return (!!this.draw && this.draw.name !== 'knifeDraw') || !!this.cycle; }
+  get busy() { return (!!this.draw && this.draw.name !== 'knifeDraw' && this.draw.name !== 'bflyDraw') || !!this.cycle; }
+  /** Animation de sortie selon l'arme */
+  drawName(w) { return w === 'knife' ? (this.knifeType === 'butterfly' ? 'bflyDraw' : 'knifeDraw') : w === 'glock' ? 'glockDraw' : 'switch'; }
 
   showModel() {
     if (!this.current || !this.models[this.mk]) return;
@@ -577,7 +690,7 @@ export class WeaponSystem {
     this.ads = 0;
     this.overlay = null;
     this.cycle = null;
-    this.draw = { name: w === 'knife' ? 'knifeDraw' : w === 'glock' ? 'glockDraw' : 'switch', t: 0, fired: 0 };
+    this.draw = { name: this.drawName(w), t: 0, fired: 0 };
     this.showModel();
     if (w === 'ak' || w === 'kar98k') sfx.switchWeapon();
     session.switchWeapon(w);
@@ -622,6 +735,7 @@ export class WeaponSystem {
 
   /** Mouvement de souris → l'arme traîne un peu (inertie, E2) */
   addLook(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
     const k = 1 - this.ads * 0.8;
     this.sway.vx += Math.max(-40, Math.min(40, dx)) * 0.00012 * k;
     this.sway.vy += Math.max(-40, Math.min(40, dy)) * 0.00012 * k;
@@ -792,6 +906,7 @@ export class WeaponSystem {
     results.forEach((r, i) => {
       const d = r.dir || dir;
       const end = { x: eye.x + d.x * r.dist, y: eye.y + d.y * r.dist, z: eye.z + d.z * r.dist };
+      if (![end.x, end.y, end.z, from.x, from.y, from.z].every(Number.isFinite)) return; // jamais d'effet à une position NaN
       if (!w.pellets || i % 2 === 0) this.effects.tracer(from, end);
       if (r.hitWall) { this.effects.impact(end); if (i < 2) sfx.impact(end); }
       if (r.hitPlayer && (r.confirmed || res.confirmed)) this.effects.blood(end);
@@ -803,7 +918,8 @@ export class WeaponSystem {
     player.pitch = Math.min(1.55, player.pitch + kick);
     if (this.current === 'ak' || this.current === 'mp5') {
       // Motif de recul fixe (+ un tout petit peu d'aléatoire)
-      const pat = RECOIL_PATTERN[Math.min(this.shotsInRow, RECOIL_PATTERN.length - 1)];
+      // shotsInRow redescend en continu (décimal) : on arrondit, sinon l'index donne undefined → NaN
+      const pat = RECOIL_PATTERN[Math.min(Math.floor(this.shotsInRow), RECOIL_PATTERN.length - 1)] || 0;
       player.yaw -= (pat * 0.006 + (Math.random() - 0.5) * 0.0015) * adsMul * (this.current === 'mp5' ? 0.6 : 1);
     } else player.yaw += (Math.random() - 0.5) * 0.008 * Math.min(this.shotsInRow + 1, 8) / 4 * adsMul;
     this.recoil += kick * (this.current === 'kar98k' ? 0.85 : 0.6);
@@ -874,6 +990,8 @@ export class WeaponSystem {
       k.cart = phase < 0.55 ? 1 : 0; // la balle est visible dans la main jusqu'à ce qu'elle entre
     } else if (t > 0.25 && t <= w.reloadOpen) k.cart = 1;
     k.hx = 0.02 * handIn; k.hy = (0.13 - dip * 0.06) * handIn; k.hz = 0.33 * handIn;
+    // Doigts gauches : la balle pincée entre pouce et index, puis le pouce la pousse dans la fenêtre
+    k._lp = mixPose(mixPose(HP.SUPPORT, HP.CART, handIn, this._kl1 || (this._kl1 = new Float32Array(POSE_LEN))), HP.PUSH, dip * handIn, this._kl2 || (this._kl2 = new Float32Array(POSE_LEN)));
     // retour en douceur à la fin
     const out = clamp01((t - (r.total - 0.25)) / 0.25);
     for (const key of ['rz', 'rx', 'ry', 'py', 'px', 'pz']) k[key] *= 1 - out;
@@ -898,6 +1016,8 @@ export class WeaponSystem {
     }
     const handIn = clamp01((t - 0.05) / 0.25) * (1 - clamp01((t - close) / 0.2));
     k.hx = (0.0 - fetch * 0.05) * handIn; k.hy = (0.0 + dip * 0.025 - fetch * 0.16) * handIn; k.hz = (0.24 + fetch * 0.1) * handIn;
+    // Doigts : la main lâche la pompe, pince une cartouche, le pouce l'enfonce
+    k._lp = mixPose(mixPose(HP.SUPPORT, HP.CART, handIn, this._sl1 || (this._sl1 = new Float32Array(POSE_LEN))), HP.PUSH, dip * handIn, this._sl2 || (this._sl2 = new Float32Array(POSE_LEN)));
     // Arme vide au départ : on pompe à la fin pour chambrer
     if (r.wasEmpty && t > close) { const u = clamp01((t - close) / w.reloadClose); k.pump = Math.sin(u * Math.PI); }
     const out = clamp01((t - (r.total - 0.25)) / 0.25), inn = ease(clamp01(t / 0.2));
@@ -927,7 +1047,8 @@ export class WeaponSystem {
 
     // Inertie : ressort amorti qui ramène l'arme au centre
     const sw = this.sway;
-    sw.vx += -sw.x * 120 * dt; sw.vy += -sw.y * 120 * dt;
+    if (![sw.x, sw.y, sw.vx, sw.vy].every(Number.isFinite)) { sw.x = sw.y = sw.vx = sw.vy = 0; }
+    sw.vx +=-sw.x * 120 * dt; sw.vy += -sw.y * 120 * dt;
     sw.vx *= Math.max(0, 1 - 14 * dt); sw.vy *= Math.max(0, 1 - 14 * dt);
     sw.x += sw.vx * dt * 60; sw.y += sw.vy * dt * 60;
     sw.x = Math.max(-0.06, Math.min(0.06, sw.x)); sw.y = Math.max(-0.06, Math.min(0.06, sw.y));
@@ -951,11 +1072,21 @@ export class WeaponSystem {
       // Animation en cours : sortie > rechargement > inspection
       let k = {};
       let drawLower = 0;
-      if (this.draw && ANIMS[this.draw.name]) k = track(clamp01(this.draw.t), ANIMS[this.draw.name].keys);
+      let at = 0, akeys = null; // animation à images clés en cours (pour les poses des doigts)
+      if (this.draw && ANIMS[this.draw.name]) { at = clamp01(this.draw.t); akeys = ANIMS[this.draw.name].keys; }
       else if (this.draw) drawLower = 1 - ease(clamp01(this.draw.t)); // simple changement d'arme
-      else if (this.reload) k = this.reload.anim === 'kar' ? this.karReloadPose(this.reload) : this.reload.anim === 'shotgun' ? this.shotgunReloadPose(this.reload) : track(this.reload.t / this.reload.total, ANIMS[this.reload.anim].keys);
-      else if (this.cycle) k = track(clamp01(this.cycle.t), ANIMS[CYCLES[this.cycle.w || 'kar98k'].anim].keys);
-      else if (this.inspect) k = track(this.inspect.t, ANIMS[INSPECTS[this.current]].keys);
+      else if (this.reload) {
+        if (this.reload.anim === 'kar') k = this.karReloadPose(this.reload);
+        else if (this.reload.anim === 'shotgun') k = this.shotgunReloadPose(this.reload);
+        else { at = this.reload.t / this.reload.total; akeys = ANIMS[this.reload.anim].keys; }
+      }
+      else if (this.cycle) { at = clamp01(this.cycle.t); akeys = ANIMS[CYCLES[this.cycle.w || 'kar98k'].anim].keys; }
+      else if (this.inspect) { at = this.inspect.t; akeys = ANIMS[INSPECTS[this.current]].keys; }
+      if (akeys) k = track(at, akeys);
+      // Poses des doigts visées (la main y va avec un peu d'inertie)
+      const rTarget = this._rp || (this._rp = new Float32Array(POSE_LEN)), lTarget = this._lp || (this._lp = new Float32Array(POSE_LEN));
+      if (ud.rHand) { if (k._rp) rTarget.set(k._rp); else if (akeys) handPose(at, akeys, 'rf', ud.rHand.userData.rest, rTarget); else rTarget.set(ud.rHand.userData.rest); }
+      if (ud.lHand) { if (k._lp) lTarget.set(k._lp); else if (akeys) handPose(at, akeys, 'lf', ud.lHand.userData.rest, lTarget); else lTarget.set(ud.lHand.userData.rest); }
       const bolt = 0;
 
       const adsY = -ud.sightY, adsZ = pose.adsZ[this.currentOptic] ?? pose.adsZ.iron;
@@ -1028,9 +1159,18 @@ export class WeaponSystem {
             ud.bolt.position.z);
           const target = knob.add(ud.knobGrip); // la main pince la boule
           ud.rightHand.position.lerpVectors(ud.rightHome, target, hw);
+          // Trajet en arc (la main passe à côté de la crosse au lieu de la traverser)
+          const arc = Math.sin(hw * Math.PI);
+          ud.rightHand.position.x += arc * 0.03; ud.rightHand.position.y += arc * 0.02;
           ud.rightHand.rotation.set(-0.5 * hw, 0.25 * hw, 0.5 * hw + ang * 0.35 * hw);
+          // Doigts : on lâche la poignée et on pince la boule entre le pouce et l'index
+          if (ud.rHand && !k._rp) mixPose(rTarget, HP.PINCH, clamp01(hw * 1.4), rTarget);
         }
       }
+      // Doigts (après les mains : la pose suit la position)
+      const fk = Math.min(1, dt * 22);
+      if (ud.rHand) ud.rHand.userData.blendTo(rTarget, dt > 0 ? fk : 1);
+      if (ud.lHand) ud.lHand.userData.blendTo(lTarget, dt > 0 ? fk : 1);
       // L'avant-bras droit suit le poignet
       if (ud.rightArm) {
         const A = ud.rightArm;
@@ -1045,19 +1185,20 @@ export class WeaponSystem {
       const swg = Math.sin(this.swing * Math.PI);
       let k = {};
       const bf = this.mk === 'butterfly';
-      if (this.draw?.name === 'knifeDraw') k = track(clamp01(this.draw.t), ANIMS[bf ? 'bflyDraw' : 'knifeDraw'].keys);
+      const dn = this.draw?.name;
+      if (dn === 'knifeDraw' || dn === 'bflyDraw') k = track(clamp01(this.draw.t), ANIMS[bf ? 'bflyDraw' : 'knifeDraw'].keys);
       else if (this.inspect) k = track(this.inspect.t, ANIMS[bf ? 'bflyInspect' : 'knifeInspect'].keys);
-      m.position.set(0.22 + bobX - sw.x - swg * 0.2 + (k.px || 0), -0.16 - bobY + sw.y - land - sa * 0.05 + (k.py || 0), -0.46 - swg * 0.15 + (k.pz || 0));
-      m.rotation.set(0.5 - swg * 0.9 + (k.rx || 0) + sw.y * 2, -0.35 + swg * 1.0 + (k.ry || 0) + sw.x * 2, -0.25 + (k.rz || 0) - sl * 0.3);
-      // La lame seule tourne dans la main / s'envole
-      if (bf) {
-        // Papillon : tourne autour de l'annulaire, les manches s'ouvrent / se ferment
-        ud.spin.rotation.x = -(k.bs || 0);
-        ud.handleA.rotation.x = k.ha || 0;
-        ud.handleB.rotation.x = -(k.hb || 0);
-      } else {
+      const [bx, by, bz] = bf ? BFLY_POS : [0.22, -0.16, -0.46];
+      const [brx, bry, brz] = bf ? BFLY_ROT : [0.5, -0.35, -0.25];
+      m.position.set(bx + bobX - sw.x - swg * 0.2 + (k.px || 0), by - bobY + sw.y - land - sa * 0.05 + (k.py || 0), bz - swg * 0.15 + (k.pz || 0));
+      m.rotation.set(brx - swg * 0.9 + (k.rx || 0) + sw.y * 2, bry + swg * 1.0 + (k.ry || 0) + sw.x * 2, brz + (k.rz || 0) - sl * 0.3);
+      const fk = dt > 0 ? Math.min(1, dt * 22) : 1;
+      if (bf) bflyPose(ud, k, fk);
+      else {
+        // Couteau de combat : la lame tourne dans la main, les doigts se desserrent pendant le tour
         ud.blade.position.set(0, (k.ktoss || 0), 0);
         ud.blade.rotation.set(-(k.kflip || 0), 0, k.kspin || 0);
+        if (ud.kHand) ud.kHand.userData.blendTo(mixPose(HP.KNIFE, HP.OPEN, clamp01(k.fo || 0), this._kp || (this._kp = new Float32Array(POSE_LEN))), fk);
       }
       ud.hand.visible = true;
     }
@@ -1074,7 +1215,7 @@ export class WeaponSystem {
       this.primary = info.primary; this.optic = validOptic(info.primary, info.optic); this.secondary = info.secondary || 'glock';
       this.rebuild(info.skins || {});
     }
-    if (info.weapon !== this.current) { this.current = info.weapon; this.showModel(); this.draw = { name: info.weapon === 'knife' ? 'knifeDraw' : info.weapon === 'glock' ? 'glockDraw' : 'switch', t: 0, fired: 0 }; }
+    if (info.weapon !== this.current) { this.current = info.weapon; this.showModel(); this.draw = { name: this.drawName(info.weapon), t: 0, fired: 0 }; }
     // Rechargement vu de l'extérieur : on lance l'animation quand il commence
     if (info.reloading && !this.reload && this.isGun) {
       const plan = reloadPlan(this.current, Math.max(0, info.mag), info.reserve + 1);
@@ -1089,8 +1230,8 @@ export class WeaponSystem {
     const ov = opt?.overlay && this.ads > 0.85 ? opt.overlay : null;
     if (ov !== this.overlay) { this.overlay = ov; this.showModel(); }
     this.specZoom = !opt ? 1 : opt.overlay ? (this.overlay ? opt.zoom : 1 + 0.25 * this.ads) : 1 + (opt.zoom - 1) * ease(this.ads);
-    if (info.insp && !this.inspect && !this.reload && INSPECT_TIME[this.current]) this.inspect = { t: 0, fired: 999 };
-    if (this.inspect) { this.inspect.t += dt / INSPECT_TIME[this.current]; if (this.inspect.t >= 1 || !info.insp) this.inspect = null; }
+    if (info.insp && !this.inspect && !this.reload && INSPECT_TIME[this.mk]) this.inspect = { t: 0, fired: 999 };
+    if (this.inspect) { this.inspect.t += dt / INSPECT_TIME[this.mk]; if (this.inspect.t >= 1 || !info.insp) this.inspect = null; }
     if (this.cycle) { this.cycle.t += dt / WEAPONS[this.cycle.w].fireInterval; if (this.cycle.t >= 1) this.cycle = null; }
     this.sprintAnim += ((info.spr ? 1 : 0) - this.sprintAnim) * Math.min(1, dt * 8);
     this.animate(dt, { speed: moving, grounded: true, sliding: false, sprinting: !!info.spr, pitch: 0, bob: (this._specBob = (this._specBob || 0) + dt * moving * 1.6) });
@@ -1156,6 +1297,7 @@ function rightGripHand(g, M, pos, forearmEnd, tilt = 0.3) {
   g.add(group);
   g.userData.rightHand = group;
   g.userData.rightHome = group.position.clone();
+  g.userData.rHand = hand; // squelette (poses des doigts)
   const elbow = new THREE.Vector3(...forearmEnd), w0 = new THREE.Vector3(...wrist).add(group.position);
   g.userData.rightArm = { mesh: fa, elbow, wristLocal: new THREE.Vector3(...wrist), len0: w0.distanceTo(elbow) };
 }
@@ -1175,6 +1317,7 @@ function leftSupportHand(g, M, pos, forearmEnd) {
   g.add(group);
   g.userData.leftHand = group;
   g.userData.leftHome = group.position.clone();
+  g.userData.lHand = hand;
 }
 
 /**
@@ -1199,6 +1342,7 @@ function pistolSupportHand(g, M, pos, forearmEnd) {
   g.add(group);
   g.userData.leftHand = group;
   g.userData.leftHome = group.position.clone();
+  g.userData.lHand = hand;
 }
 
 let flashTex = null;
@@ -1423,27 +1567,91 @@ function buildGlock(skin, skins) {
 }
 
 /**
- * Couteau papillon (balisong) : une lame et deux manches ajourés qui pivotent
- * sur deux goupilles. Tout l'ensemble tourne autour de l'annulaire (spin).
+ * Couteau papillon (balisong) : une lame et deux manches ajourés qui pivotent sur deux goupilles.
+ * Main tenue de profil (paume vers la gauche, index en haut, doigts vers l'avant) : le couteau
+ * peut ainsi rouler d'un doigt à l'autre dans les espaces entre les doigts.
+ * Le groupe "pivot" a son origine entre les deux goupilles ; c'est lui qu'on oriente / déplace.
  */
 function buildButterfly(skin, skinId, skins) {
   const std = !skinId || skinId === 'default';
   const { g, part } = glbWeapon('butterfly', skin, (m) => (std ? {} : { Blade: m.body, Handle: m.accent }));
   const M = armMaterials(skins);
-  Object.assign(g.userData, { spin: part('spin'), handleA: part('handleA'), handleB: part('handleB'), blade: part('knife') });
+  const knife = part('knife');
+  // "frame" = repère de la main (doigts vers -z, index en +y, paume vers -x), tourné pour que le dos
+  // de la main soit face à nous, doigts vers le haut : le plat de la lame est bien visible.
+  const frame = new THREE.Group();
+  frame.quaternion.copy(BQ_FRAME);
+  g.add(frame);
+  const pivot = new THREE.Group();
+  frame.add(pivot);
+  pivot.add(knife);
+  knife.position.set(0, 0, -0.006); // goupilles au centre du pivot
+  knife.rotation.set(0, 0, 0);
+  Object.assign(g.userData, { pivot, frame, handleA: part('handleA'), handleB: part('handleB'), blade: knife });
 
-  // Main : l'annulaire sert d'axe
   const handG = new THREE.Group();
-  const hand = makeHand(M.glove, { curl: [-1.35, -1.15, -0.8], thumbCurl: -0.25, thumbSpread: -0.25 });
-  hand.scale.x = -1;
-  orientHand(hand, [0, 0, 1], [1, 0, 0], [0, 1, 0]);
-  hand.position.set(0.028, 0.02, 0.085);
-  handG.add(hand);
-  handG.add(capsule([0.02, 0, 0.12], [0.04, -0.04, 0.2], 0.034, M.glove));
-  handG.add(capsule([0.04, -0.04, 0.2], [0.1, -0.16, 0.5], 0.05, M.sleeve));
+  const hand = makeHand(M.glove, { curl: [-1.6, -1.5, -1.0], thumbCurl: -0.9, thumbSpread: -0.1 });
+  hand.scale.x = -1;                                      // main droite
+  orientHand(hand, [0, -1, 0], [1, 0, 0], [0, 0, 1]);     // index en haut, paume à gauche, doigts vers -z
+  frame.add(hand);
+  handG.add(capsule([0, -0.02, 0.0], [0.01, -0.07, 0.03], 0.034, M.glove));      // poignet (sous la main)
+  handG.add(capsule([0.01, -0.07, 0.03], [0.07, -0.4, 0.26], 0.05, M.sleeve));    // avant-bras vers le bas et vers nous
   g.add(handG);
   g.userData.hand = handG;
+  g.userData.kHand = hand;
   return g;
+}
+// Repère "main" → modèle : paume (-x) vers l'avant, doigts (-z) vers le haut, index (+y) vers la gauche
+const BQ_FRAME = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+  new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, -1, 0)));
+
+// ---- Papillon : orientations de base du couteau (repère de la main) ----
+// colonnes = où vont les axes du couteau : x = épaisseur, y = axe des goupilles, z = longueur (lame vers -z)
+const basisQ = (x, y, z) => new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(new THREE.Vector3(...x), new THREE.Vector3(...y), new THREE.Vector3(...z)));
+const BQ_H = basisQ([1, 0, 0], [0, 0, 1], [0, -1, 0]);   // dans le poing, lame vers le haut
+const BQ_R = basisQ([0, 1, 0], [0, 0, 1], [1, 0, 0]);    // à plat entre deux doigts (épaisseur dans l'espace entre les doigts)
+const BQ_C = basisQ([0, 0, 1], [-1, 0, 0], [0, -1, 0]);  // Chaplin : lame en haut, goupilles enfilées sur l'annulaire
+const BFLY_HOLD = new THREE.Vector3(-0.022, 0.04, -0.054); // goupilles juste au-dessus du poing
+const BFLY_POS = [0.2, -0.14, -0.42], BFLY_ROT = [-0.25, 0.1, -0.5]; // lame vers le haut et la gauche
+const AX = new THREE.Vector3(1, 0, 0), AZ = new THREE.Vector3(0, 0, 1);
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _q3 = new THREE.Quaternion(), _v = new THREE.Vector3();
+const BF_FIST = pose([-1.6, -1.5, -1.0], { thumbCurl: -0.9, thumbSpread: -0.1 });
+const BF_OPEN = pose([-0.32, -0.22, -0.12], { thumbCurl: -0.15, thumbSpread: -0.95, splay: 0.12 });
+const BF_CHAP = pose([-1.55, -1.45, -0.95], { ring: [-0.05, -0.05, 0.02], thumbCurl: -0.7, thumbSpread: -0.3, splay: 0.05 });
+const _bp = new Float32Array(POSE_LEN);
+
+/** Place le couteau papillon et plie les doigts selon les canaux d'animation (cf. bflyDraw / bflyInspect) */
+function bflyPose(ud, k, fk) {
+  // Orientation de base : mélange pondéré des 3 orientations
+  let wH = k.bH || 0, wR = k.bR || 0, wC = k.bC || 0;
+  const s = wH + wR + wC;
+  if (s < 1e-4) wH = 1; else { wH /= s; wR /= s; wC /= s; }
+  _q.set(0, 0, 0, 0);
+  for (const [q, w] of [[BQ_H, wH], [BQ_R, wR], [BQ_C, wC]]) {
+    if (!w) continue;
+    const sg = _q.x * q.x + _q.y * q.y + _q.z * q.z + _q.w * q.w < 0 ? -w : w; // même hémisphère
+    _q.x += q.x * sg; _q.y += q.y * sg; _q.z += q.z * sg; _q.w += q.w * sg;
+  }
+  _q.normalize();
+  // Roulé autour des doigts : les goupilles font le tour de chaque doigt, le couteau tourne avec
+  const rl = clamp01(k.rl || 0), rg = k.rg || 0;
+  const spin = (k.sz || 0) - rl * PI * rg;
+  _q2.setFromAxisAngle(AZ, spin).multiply(_q3.setFromAxisAngle(AX, k.fx || 0)).multiply(_q);
+  _q2.multiply(_q3.setFromAxisAngle(AX, k.fs || 0)); // bascule autour de l'axe des goupilles (repère du couteau)
+  ud.pivot.quaternion.copy(_q2);
+  _v.set(BFLY_HOLD.x + (k.kx || 0), BFLY_HOLD.y + (k.ky || 0), BFLY_HOLD.z + (k.kz || 0));
+  if (rl > 0) _v.lerp({ x: 0.014 * Math.abs(Math.sin(PI * rg)), y: 0.036 - 0.018 * rg, z: -0.072 }, rl);
+  ud.pivot.position.copy(_v);
+  ud.handleA.rotation.x = k.ha || 0;
+  ud.handleB.rotation.x = -(k.hb || 0);
+  // Doigts : poing ↔ ouverts ; le doigt que le couteau enjambe se soulève ; Chaplin = annulaire tendu
+  mixPose(BF_FIST, BF_OPEN, Math.max(0, Math.min(1.15, k.fo || 0)), _bp);
+  if (rl > 0) for (let i = 0; i < 4; i++) {
+    const lift = clamp01(1 - Math.abs(rg - (i + 0.5)) * 1.6) * rl;
+    _bp[i * 3] += lift * 0.5; _bp[i * 3 + 1] += lift * 0.25;
+  }
+  if (k.ce) mixPose(_bp, BF_CHAP, clamp01(k.ce), _bp);
+  ud.kHand.userData.blendTo(_bp, fk);
 }
 
 function buildKnife(skin, skinId, skins) {
@@ -1464,5 +1672,6 @@ function buildKnife(skin, skinId, skins) {
   handG.add(capsule([0.04, -0.04, 0.19], [0.1, -0.16, 0.5], 0.05, M.sleeve));
   g.add(handG);
   g.userData.hand = handG;
+  g.userData.kHand = hand;
   return g;
 }

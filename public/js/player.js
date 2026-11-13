@@ -42,7 +42,9 @@ export class LocalPlayer {
 
   /** Rotation de la caméra à la souris */
   look(input) {
-    const [dx, dy] = input.consumeMouse();
+    let [dx, dy] = input.consumeMouse();
+    if (!Number.isFinite(dx)) dx = 0;
+    if (!Number.isFinite(dy)) dy = 0;
     this.lastLook = [dx, dy];
     const k = 0.0022 * settings.sensitivity / this.zoom; // moins sensible quand on zoome
     this.yaw -= dx * k;
@@ -160,6 +162,16 @@ export class LocalPlayer {
   }
 
   applyCamera() {
+    // Sécurité : une seule valeur NaN suffit à rendre l'écran noir (caméra invalide)
+    if (!Number.isFinite(this.yaw)) this.yaw = 0;
+    if (!Number.isFinite(this.pitch)) this.pitch = 0;
+    if (!Number.isFinite(this.roll)) this.roll = 0;
+    if (!Number.isFinite(this.bob)) this.bob = 0;
+    if (!Number.isFinite(this.eyeHeight)) this.eyeHeight = PLAYER.EYE;
+    if (!Number.isFinite(this.fovBoost)) this.fovBoost = 0;
+    if (!(this.zoom > 0) || !Number.isFinite(this.zoom)) this.zoom = 1;
+    for (const k of ['x', 'y', 'z']) if (!Number.isFinite(this.vel[k])) this.vel[k] = 0;
+    if (![this.pos.x, this.pos.y, this.pos.z].every(Number.isFinite)) { this.pos.x = 0; this.pos.y = 2; this.pos.z = 0; }
     const bobY = Math.sin(this.bob * 2) * (this.sprinting ? 0.05 : 0.035);
     this.camera.position.set(this.pos.x, this.pos.y + this.eyeHeight + bobY, this.pos.z);
     this.camera.rotation.set(this.pitch, this.yaw, this.roll);

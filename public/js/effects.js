@@ -7,6 +7,9 @@ import { sfx } from './audio.js';
 // Tailles des douilles [rayon, longueur]
 const SHELLS = { ak: [0.0058, 0.039], mp5: [0.0052, 0.019], kar98k: [0.0062, 0.057], glock: [0.0052, 0.019], shotgun: [0.0105, 0.058] };
 
+// Un seul sommet NaN dans la scène peut noircir tout l'écran (le bloom propage le NaN) : on filtre.
+const ok = (p) => !!p && Number.isFinite(p.x) && Number.isFinite(p.y) && Number.isFinite(p.z);
+
 export class Effects {
   constructor(scene) {
     this.scene = scene;
@@ -24,6 +27,8 @@ export class Effects {
    * floorY = hauteur du sol sous le tireur (pour le rebond).
    */
   shell(type, pos, vel, floorY = 0) {
+    if (!ok(pos) || !ok(vel)) return;
+    if (!Number.isFinite(floorY)) floorY = 0;
     const [r, len] = SHELLS[type] || SHELLS.ak;
     if (!this.shellGeos[type]) this.shellGeos[type] = new THREE.CylinderGeometry(r, r * 1.04, len, 8);
     const m = new THREE.Mesh(this.shellGeos[type], type === 'shotgun' ? this.hull : this.brass);
@@ -63,6 +68,7 @@ export class Effects {
 
   /** Ligne lumineuse rapide entre deux points */
   tracer(from, to) {
+    if (!ok(from) || !ok(to)) return;
     const geo = new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(from.x, from.y, from.z), new THREE.Vector3(to.x, to.y, to.z),
     ]);
@@ -85,8 +91,8 @@ export class Effects {
     }
   }
 
-  impact(p) { this.burst(p, 0xffd27a, 5, 2.5); }
-  blood(p) { this.burst(p, 0xff3355, 8, 2); }
+  impact(p) { if (ok(p)) this.burst(p, 0xffd27a, 5, 2.5); }
+  blood(p) { if (ok(p)) this.burst(p, 0xff3355, 8, 2); }
 
   update(dt) {
     this.updateShells(dt);

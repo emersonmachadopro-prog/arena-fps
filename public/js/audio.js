@@ -143,10 +143,12 @@ addEventListener('pointerdown', () => { if (musicWanted && music?.paused) music.
 
 /** Position/orientation de l'auditeur = la caméra (à appeler à chaque image) */
 export function setListener(camera) {
-  if (!ctx) return;
+  if (!ctx || !camera) return;
   const L = ctx.listener;
   const p = camera.position;
   const f = { x: -Math.sin(camera.rotation.y) * Math.cos(camera.rotation.x), y: Math.sin(camera.rotation.x), z: -Math.cos(camera.rotation.y) * Math.cos(camera.rotation.x) };
+  // Caméra invalide (NaN) : setTargetAtTime lèverait une exception à chaque image
+  if (![p.x, p.y, p.z, f.x, f.y, f.z].every(Number.isFinite)) return;
   if (L.positionX) {
     const t = ctx.currentTime;
     L.positionX.setTargetAtTime(p.x, t, 0.01); L.positionY.setTargetAtTime(p.y, t, 0.01); L.positionZ.setTargetAtTime(p.z, t, 0.01);
@@ -166,6 +168,7 @@ function output(pos, vol = 1, reverb = 0.2, far = 60, ref = 2.5) {
   const g = ctx.createGain();
   g.gain.value = vol;
   let head = g;
+  if (pos && ![pos.x, pos.y, pos.z].every(Number.isFinite)) pos = null; // position invalide → son non spatialisé
   if (pos) {
     const pan = ctx.createPanner();
     pan.panningModel = 'HRTF';
