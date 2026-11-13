@@ -2,7 +2,7 @@
 //  solo.js — Mode entraînement hors-ligne avec des bots.
 //  Tout est calculé dans le navigateur (pas besoin du multijoueur).
 // =====================================================================
-import { PLAYER, WEAPONS, pelletDirs, pelletDamage } from '/shared/constants.js';
+import { PLAYER, WEAPONS, pelletDirs, pelletDamage, zoneDamage } from '/shared/constants.js';
 import { MAP_BOXES, SPAWNS, BOT_WAYPOINTS } from '/shared/map.js';
 import { moveAndCollide, raycastWorld, traceShot, dirFromAngles } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
@@ -96,7 +96,7 @@ export class SoloSession {
         const r = traceShot(origin, d, targets, MAP_BOXES, w.range);
         if (!r.hit) return { dir: d, dist: Math.min(r.wallDist, w.range), hitWall: r.wallDist < w.range };
         const e = per.get(r.hit.id) || { dmg: 0, head: false };
-        e.dmg += pelletDamage(w, r.hit.dist, r.hit.headshot); e.head ||= r.hit.headshot;
+        e.dmg += pelletDamage(w, r.hit.dist, r.hit.zone); e.head ||= r.hit.headshot;
         per.set(r.hit.id, e);
         return { dir: d, dist: r.hit.dist, hitPlayer: true, confirmed: true };
       });
@@ -105,7 +105,7 @@ export class SoloSession {
     }
     const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range);
     if (hit) {
-      this.hitBot(hit.id, hit.headshot ? w.headDamage : w.damage, hit.headshot, weapon);
+      this.hitBot(hit.id, zoneDamage(w, hit.zone), hit.headshot, weapon);
       return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
     }
     return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
@@ -220,6 +220,7 @@ export class SoloSession {
     const target = [{ id: 'me', x: player.pos.x, y: player.pos.y, z: player.pos.z, crouch: player.crouch }];
     const { hit, wallDist } = traceShot(eye, d, target, MAP_BOXES, 200);
     const end = hit ? hit.dist : wallDist;
+    bot.avatar.fire();
     const muzzle = bot.avatar.muzzleWorld(); // la traçante part du canon de son arme
     this.ctx.effects.tracer(muzzle, { x: eye.x + d.x * end, y: eye.y + d.y * end, z: eye.z + d.z * end });
     sfx.shot(muzzle);
@@ -229,7 +230,7 @@ export class SoloSession {
     }
     if (!hit) return;
 
-    player.hp -= hit.headshot ? 40 : 14; // les bots font moins mal que l'AK du joueur
+    player.hp -= hit.headshot ? 40 : hit.zone === 'legs' ? 11 : 14; // les bots font moins mal que l'AK du joueur
     sfx.hurt();
     const yawTo = Math.atan2(-(bot.pos.x - player.pos.x), -(bot.pos.z - player.pos.z));
     this.ctx.hud.damage(-(yawTo - player.yaw));

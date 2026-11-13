@@ -4,7 +4,7 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted, pelletDirs, pelletDamage } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted, pelletDirs, pelletDamage, zoneDamage } from '../shared/constants.js';
 import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
@@ -338,7 +338,7 @@ export class Room {
     p.yaw = data.yaw;
     p.pitch = Math.max(-1.55, Math.min(1.55, data.pitch));
     p.crouch = !!data.crouch;
-    p.ads = !!data.ads; p.insp = !!data.insp; p.spr = !!data.spr; // pour l'animation vue en spectateur
+    p.ads = !!data.ads; p.insp = !!data.insp; p.spr = !!data.spr; p.sl = !!data.sl; // pour les animations vues par les autres
     p.lastMove = now;
   }
 
@@ -457,7 +457,7 @@ export class Room {
         if (!first) first = r;
         if (r.hit) {
           const e = per.get(r.hit.id) || { dmg: 0, head: false, dist: r.hit.dist, d };
-          e.dmg += pelletDamage(w, r.hit.dist, r.hit.headshot);
+          e.dmg += pelletDamage(w, r.hit.dist, r.hit.zone);
           e.head ||= r.hit.headshot;
           per.set(r.hit.id, e);
         }
@@ -478,7 +478,7 @@ export class Room {
     const point = { x: eye.x + dir.x * endDist, y: eye.y + dir.y * endDist, z: eye.z + dir.z * endDist };
     this.io.to(this.code).emit('shot', { id: p.id, weapon: weaponId, from: eye, dir, dist: endDist, point, hitPlayer: !!hit, hitWall: !hit && wallDist < w.range });
 
-    if (hit) this.damage(p, this.players.get(hit.id), hit.headshot ? w.headDamage : w.damage, hit.headshot, weaponId, point);
+    if (hit) this.damage(p, this.players.get(hit.id), zoneDamage(w, hit.zone), hit.headshot, weaponId, point); // tête / torse / jambes (×0,75)
   }
 
   damage(attacker, victim, amount, headshot, weapon, point) {
@@ -539,7 +539,7 @@ export class Room {
         id: p.id, name: p.name, team: p.team,
         x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3),
         yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
-        crouch: p.crouch, ads: !!p.ads, insp: !!p.insp, spr: !!p.spr, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
+        crouch: p.crouch, ads: !!p.ads, insp: !!p.insp, spr: !!p.spr, sl: !!p.sl, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
         mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd, secondary: p.secondary, ping: p.isBot ? -1 : p.ping,
         kills: p.kills, deaths: p.deaths,
       })),

@@ -159,7 +159,7 @@ export class NetGame {
       }
       av.setWeapon(p.weapon, p.weapon === p.primary ? p.optic : 'iron');
       // Rechargement (F4) + son positionné
-      if (p.reloading && av.reloadT < 0 && p.alive) sfx.remoteReload({ x: p.x, y: p.y + 1.2, z: p.z }, p.weapon);
+      if (p.reloading && !av.reloading && p.alive) sfx.remoteReload({ x: p.x, y: p.y + 1.2, z: p.z }, p.weapon);
       av.setReloading(p.reloading);
       if (!p.alive && !av.dead) av.die();       // chute (F5)
       if (p.alive && av.dead) av.revive();
@@ -182,6 +182,7 @@ export class NetGame {
     if (e.hitPlayer) this.ctx.effects.blood(e.point);
     if (mine) return; // notre traçante et notre son sont déjà joués localement
     const av = this.avatars.get(e.id);
+    av?.fire(); // recul de son arme / coup de couteau
     const to = e.point;
     const from = av && !av.dead ? av.muzzleWorld() : { x: e.from.x + e.dir.x * 0.7, y: e.from.y - 0.25, z: e.from.z + e.dir.z * 0.7 }; // depuis le canon de l'arme
     if (e.weapon !== 'knife') {
@@ -301,7 +302,7 @@ export class NetGame {
       this.socket.volatile.emit('move', {
         x: player.pos.x, y: player.pos.y, z: player.pos.z,
         yaw: player.yaw, pitch: player.pitch, crouch: player.crouch,
-        ads: this.ctx.weapons.ads > 0.5, insp: !!this.ctx.weapons.inspect, spr: !!player.sprinting,
+        ads: this.ctx.weapons.ads > 0.5, insp: !!this.ctx.weapons.inspect, spr: !!player.sprinting, sl: !!player.sliding,
       });
     }
 

@@ -21,11 +21,30 @@ export const PLAYER = {
   STEP_HEIGHT: 0.45,      // hauteur de marche franchissable automatiquement
 };
 
-// Zones touchables (hitbox) : tronc + tête, relatives aux pieds du joueur
+// ---------------------------------------------------------------------
+//  HITBOX COMMUNE À TOUS LES SKINS : 3 zones (tête / torse / jambes), debout et accroupi.
+//  Boîtes centrées sur le joueur (pieds = 0), indépendantes du modèle 3D :
+//  un skin ne change JAMAIS la hitbox. Alignées sur character.glb (casquette ≈ 1,84 m,
+//  épaules ≈ 1,48 m, hanches ≈ 0,93 m ; accroupi = un genou au sol, bassin descendu de 0,5 m).
+//  y = [bas, haut] en mètres, half = demi-largeur (x et z).
+// ---------------------------------------------------------------------
 export const HITBOX = {
-  stand:  { body: [0, 1.45], head: [1.45, 1.85], bodyHalf: 0.38, headHalf: 0.22 },
-  crouch: { body: [0, 0.95], head: [0.95, 1.35], bodyHalf: 0.38, headHalf: 0.22 },
+  stand: {
+    head: { y: [1.5, 1.86], half: 0.15 },
+    torso: { y: [0.9, 1.5], half: 0.25 },
+    legs: { y: [0, 0.9], half: 0.19 },
+  },
+  crouch: {
+    head: { y: [0.98, 1.36], half: 0.18 },  // un peu plus large : le buste penche en avant
+    torso: { y: [0.46, 0.98], half: 0.28 },
+    legs: { y: [0, 0.46], half: 0.3 },      // genou en avant, l'autre au sol
+  },
 };
+export const LEG_DAMAGE = 0.75; // dégâts aux jambes = 75 % des dégâts au corps
+/** Dégâts d'une balle selon la zone touchée ('head' | 'torso' | 'legs') */
+export function zoneDamage(w, zone) {
+  return zone === 'head' ? w.headDamage : w.damage * (zone === 'legs' ? LEG_DAMAGE : 1);
+}
 
 // ---------------------------------------------------------------------
 //  Armes. La dispersion (spread) est en radians :
@@ -196,11 +215,11 @@ export function pelletDirs(dir, spread, count = 9) {
   }
   return out;
 }
-/** Dégâts d'un plomb selon la distance */
-export function pelletDamage(w, dist, head) {
+/** Dégâts d'un plomb selon la distance (zone = 'head' | 'torso' | 'legs', ou true = tête) */
+export function pelletDamage(w, dist, zone) {
   const [near, far, min] = w.falloff;
   const k = dist <= near ? 1 : dist >= far ? min : 1 - (1 - min) * (dist - near) / (far - near);
-  return (head ? w.headDamage : w.damage) * k;
+  return zoneDamage(w, zone === true ? 'head' : zone === false ? 'torso' : zone) * k;
 }
 export function validOptic(weapon, optic) {
   return WEAPON_OPTICS[weapon]?.includes(optic) ? optic : WEAPON_OPTICS[weapon]?.[0] || 'iron';

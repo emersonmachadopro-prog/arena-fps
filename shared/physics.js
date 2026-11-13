@@ -111,32 +111,36 @@ export function raycastWorld(o, d, boxes, maxDist = 500) {
   return best;
 }
 
-/** Calcule les deux hitbox (tronc et tête) d'un joueur. */
+const ZONES = ['head', 'torso', 'legs'];
+/** Calcule les 3 hitbox (tête, torse, jambes) d'un joueur — les mêmes pour tous les skins. */
 export function playerHitboxes(p, pad = 0) {
   const hb = p.crouch ? HITBOX.crouch : HITBOX.stand;
-  const mk = (range, h) => ({
-    min: [p.x - h - pad, p.y + range[0] - pad, p.z - h - pad],
-    max: [p.x + h + pad, p.y + range[1] + pad, p.z + h + pad],
-  });
-  return { body: mk(hb.body, hb.bodyHalf), head: mk(hb.head, hb.headHalf) };
+  const out = {};
+  for (const z of ZONES) {
+    const { y, half } = hb[z];
+    out[z] = {
+      min: [p.x - half - pad, p.y + y[0] - pad, p.z - half - pad],
+      max: [p.x + half + pad, p.y + y[1] + pad, p.z + half + pad],
+    };
+  }
+  return out;
 }
 
 /**
  * Teste un tir contre une liste de joueurs.
  * targets : [{ id, x, y, z, crouch }]
- * Retourne { id, headshot, dist } du joueur touché le plus proche (ou null)
- * en tenant compte des murs qui bloquent la balle.
+ * Retourne { id, zone, headshot, dist } du joueur touché le plus proche (ou null)
+ * en tenant compte des murs qui bloquent la balle. zone = 'head' | 'torso' | 'legs'.
  */
 export function traceShot(origin, dir, targets, boxes, range, pad = 0) {
   const wallDist = raycastWorld(origin, dir, boxes, range);
   let best = null;
   for (const t of targets) {
     const hb = playerHitboxes(t, pad);
-    const th = rayBox(origin, dir, hb.head.min, hb.head.max);
-    const tb = rayBox(origin, dir, hb.body.min, hb.body.max);
-    const tHit = Math.min(th, tb);
-    if (tHit < wallDist && (!best || tHit < best.dist)) {
-      best = { id: t.id, headshot: th <= tb, dist: tHit };
+    // La tête passe en premier à distance égale (zones qui se touchent)
+    for (const zone of ZONES) {
+      const d = rayBox(origin, dir, hb[zone].min, hb[zone].max);
+      if (d < wallDist && (!best || d < best.dist - 1e-6)) best = { id: t.id, zone, headshot: zone === 'head', dist: d };
     }
   }
   return { hit: best, wallDist };

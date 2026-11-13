@@ -1675,3 +1675,63 @@ function buildKnife(skin, skinId, skins) {
   g.userData.kHand = hand;
   return g;
 }
+
+// ---------------------------------------------------------------------
+//  Pour le personnage vu en 3e personne (avatars.js) : même arme .glb,
+//  et où se placent les mains sur l'arme (mêmes prises qu'en vue FPS).
+// ---------------------------------------------------------------------
+// r = paume droite sur la poignée (+ inclinaison), l = paume gauche (garde-main / pompe / prise pistolet)
+const GRIPS = {
+  ak: { r: [0.032, -0.09, 0.128], tilt: 0.35, l: [-0.012, -0.062, -0.31] },
+  kar98k: { r: [0.032, -0.058, 0.155], tilt: 0.15, l: [-0.012, -0.075, -0.33] },
+  mp5: { r: [0.032, -0.07, 0.088], tilt: 0.35, l: [-0.012, -0.052, -0.28] },
+  shotgun: { r: [0.03, -0.055, 0.165], tilt: 0.75, l: [-0.012, -0.048, -0.25] },
+  glock: { r: [0.03, -0.06, 0.078], tilt: 0.2, l: [-0.036, -0.074, 0.06], pistol: true },
+  knife: { r: [0.03, 0.022, 0.065], knife: true },
+};
+const _m4 = () => new THREE.Matrix4();
+/** Repère de la main (convention FPS, miroir compris pour la droite) dans le repère de l'arme */
+function gripFrames(id) {
+  const G = GRIPS[id] || GRIPS.ak;
+  const S = _m4().makeScale(-1, 1, 1);
+  const q = new THREE.Quaternion();
+  let R;
+  if (G.knife) {
+    orientHand({ quaternion: q }, [0, 0, 1], [1, 0, 0], [0, 1, 0]);
+    R = _m4().compose(new THREE.Vector3(...G.r), q, new THREE.Vector3(1, 1, 1)).multiply(S);
+  } else {
+    orientHand({ quaternion: q }, [0, -1, 0], [1, 0, 0], [0, 0, 1]);
+    R = _m4().makeTranslation(...G.r).multiply(_m4().makeRotationX(-G.tilt)).multiply(_m4().makeRotationFromQuaternion(q)).multiply(S);
+  }
+  let L = null;
+  if (G.pistol) {
+    const d = new THREE.Vector3(0, -0.62, -0.78).normalize();
+    const z = d.clone().negate(), y = new THREE.Vector3(-1, 0, 0), x = new THREE.Vector3().crossVectors(y, z);
+    L = _m4().makeBasis(x, y, z).setPosition(...G.l);
+  } else if (G.l) {
+    orientHand({ quaternion: q }, [0, 0, -1], [0, -1, 0], [-1, 0, 0]);
+    L = _m4().makeRotationFromQuaternion(q).setPosition(...G.l);
+  }
+  return { R, L, pistol: !!G.pistol, knife: !!G.knife };
+}
+/** Arme pour le personnage 3e personne : clone du .glb avec le skin, sans les mains */
+export function worldWeapon(id, skinId, optic = 'iron') {
+  const skin = WEAPON_SKINS[skinId] || WEAPON_SKINS.default;
+  const key = id === 'knife' ? 'knife' : id;
+  const std = !skinId || skinId === 'default';
+  const { g, part } = glbWeapon(key, skin, (m) => (key === 'knife' ? (std ? {} : { Blade: m.body }) : key === 'mp5' ? { Poly: std ? null : m.accent } : {}));
+  part('rail') && (part('rail').visible = optic !== 'iron');
+  part('irons') && (part('irons').visible = optic === 'iron');
+  for (const n of ['magRound0', 'magRound1', 'chamberRound', 'cartridge', 'hull']) { const p = part(n); if (p) p.visible = false; }
+  if (optic && optic !== 'iron' && key !== 'knife' && key !== 'glock') {
+    const mount = { ak: [0.06, 0.02], kar98k: [0.054, -0.02], mp5: [0.072, 0], shotgun: [0.048, 0] }[key];
+    if (mount) addOptic(g, optic, mount[0], mount[1]);
+  }
+  g.userData.muzzle = part('muzzle') || null;
+  g.userData.parts = { mag: part('mag'), charge: part('charge'), forend: part('forend'), slide: part('slide'), bolt: part('bolt') };
+  g.userData.grips = gripFrames(key);
+  return g;
+}
+/** Matériaux des gants (mitaines / complets / mains nues) selon le gant choisi par le joueur */
+export function gloveSlots(gloveId) { return handSlotMaterials(gloveMaterial(gloveId)); }
+export { pose as handPoseVec, HP as HAND_POSES, mixPose, POSE_LEN, SPLAY };
