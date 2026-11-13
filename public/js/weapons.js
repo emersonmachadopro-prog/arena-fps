@@ -14,8 +14,77 @@ import { WEAPON_SKINS, CHARACTER_SKINS, GLOVE_SKINS } from '/shared/skins.js';
 import { dirFromAngles } from '/shared/physics.js';
 import { sfx } from './audio.js';
 import { settings } from './settings.js';
-import { mat, box, rbox, cyl, capsule, extrude, makeHand, orientHand, skinMaterials } from './models.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+import { mat, rbox, cyl, capsule, orientHand, skinMaterials, handMaterials } from './models.js';
 import { fabricTex } from './textures.js';
+
+// ---------------------------------------------------------------------
+//  Modèles .glb (faits dans Blender) : chargés une fois avant le jeu
+// ---------------------------------------------------------------------
+const GLB_FILES = { hands: 'hands', ak: 'ak47', kar98k: 'kar98k', mp5: 'mp5', shotgun: 'm870', glock: 'glock18', knife: 'knife', butterfly: 'butterfly' };
+const GLB = Object.fromEntries(await Promise.all(Object.entries(GLB_FILES).map(async ([id, file]) => {
+  const gltf = await new GLTFLoader().loadAsync(`/models/${file}.glb`);
+  return [id, gltf.scene];
+})));
+
+/**
+ * Main riggée (hands.glb : 16 os — paume, 3 phalanges par doigt, pouce en 3 parties).
+ * Même repère et mêmes réglages que l'ancienne makeHand :
+ * paume vers -y, doigts vers -z, index en +x (main GAUCHE ; main droite : scale.x = -1).
+ * curl = pliage des phalanges [1, 2, 3] (négatif = vers la paume), indexCurl = index sur la détente.
+ * Le style du gant (mitaines / complets / nues) choisit les matériaux de chaque zone du mesh.
+ */
+const HAND_X = new THREE.Vector3(1, 0, 0), HAND_Y = new THREE.Vector3(0, 1, 0);
+const handSkinMats = new Map();
+function handSlotMaterials(glove) {
+  if (!handSkinMats.has(glove.uuid)) {
+    const H = handMaterials(glove);
+    const style = glove.userData?.gloveStyle || 'fingerless';
+    const bare = style === 'bare', full = style === 'full';
+    const hidden = new THREE.MeshBasicMaterial({ visible: false });
+    handSkinMats.set(glove.uuid, {
+      Glove: bare ? H.skin : glove,
+      GloveMid: full ? glove : H.skin,        // phalanges du milieu : nues en mitaines
+      GloveTip: full ? glove : H.skin,        // bouts des doigts
+      GlovePlate: bare ? hidden : H.plate,    // protections des jointures / renfort
+      GloveStrap: bare ? hidden : H.strap,    // sangle du poignet
+      GloveSeam: bare ? hidden : H.seam,
+      Nail: full ? hidden : H.nail,
+      Tendon: bare ? H.skin : hidden,         // tendons : mains nues seulement
+    });
+  }
+  return handSkinMats.get(glove.uuid);
+}
+function makeHand(glove, { curl = [-0.9, -1.1, -0.8], indexCurl = null, thumbCurl = -0.5, thumbSpread = -0.7 } = {}) {
+  const c3 = (c) => (c.length >= 3 ? c : [c[0], c[1], c[1] * 0.8]);
+  curl = c3(curl); if (indexCurl) indexCurl = c3(indexCurl);
+  const hand = new THREE.Group();
+  const rig = cloneSkinned(GLB.hands);
+  hand.add(rig);
+  const slots = handSlotMaterials(glove);
+  rig.traverse((o) => {
+    if (o.isMesh) { o.material = slots[o.material.name] || o.material; o.frustumCulled = false; }
+  });
+  // Rotation d'un os autour d'un axe de la MAIN (les axes locaux des os dépendent de l'export)
+  const rest = new Map();
+  rig.traverse((o) => { if (o.isBone) rest.set(o, o.quaternion.clone()); });
+  const restToHand = (b) => { const q = new THREE.Quaternion(); for (let o = b; o && o.isBone; o = o.parent) q.premultiply(rest.get(o)); return q; };
+  const turn = (name, axis, angle) => {
+    const b = rig.getObjectByName(name);
+    if (!b || !angle) return;
+    const local = axis.clone().applyQuaternion(restToHand(b).invert());
+    b.quaternion.copy(rest.get(b)).multiply(new THREE.Quaternion().setFromAxisAngle(local, angle));
+  };
+  ['index', 'middle', 'ring', 'pinky'].forEach((f, i) => {
+    const c = i === 0 && indexCurl ? indexCurl : curl;
+    for (let k = 0; k < 3; k++) turn(`${f}${k + 1}`, HAND_X, c[k]);
+  });
+  turn('thumb1', HAND_Y, thumbSpread);
+  turn('thumb2', HAND_X, thumbCurl * 0.5);
+  turn('thumb3', HAND_X, thumbCurl * 0.7);
+  return hand;
+}
 
 // Position de l'arme à l'écran sans viser (hip) + distance en visée (adsZ)
 const POSES = {
@@ -415,8 +484,7 @@ export class WeaponSystem {
     this.optic = 'iron';
     this.ammo = {};
     this.lookDown = 0;
-    this.reset(settings.loadouts?.[settings.activeLoadout]);
-  }
+    this.reset(settings.loadouts?.[settings.activeLoadout]);  }
 
   /** (Re)construit les modèles avec les skins + le viseur choisis */
   rebuild(skins = settings.skins) {
@@ -1215,97 +1283,40 @@ function addOptic(g, optic, mountY, z) {
   return null;
 }
 
-/** Cylindre posé "debout" (axe y) */
-function vcyl(r, h, material, x, y, z) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 14), material);
-  m.position.set(x, y, z);
-  return m;
+// ---------------------------------------------------------------------
+//  Modèles 3D (.glb faits dans Blender, public/models/).
+//  Chaque arme garde ses pièces animables sous forme de nœuds nommés
+//  "<arme>_<pièce>" (mag, charge, bolt, slide, forend…) placés exactement
+//  là où le code les attend : les animations n'ont pas changé.
+// ---------------------------------------------------------------------
+
+/** Clone une arme du .glb et applique les matériaux du skin (Body / Accent / Dark) */
+function glbWeapon(id, skin, overrides = () => ({})) {
+  const node = id === 'kar98k' ? 'kar' : id;   // nom de la racine dans le .glb
+  const src = GLB[id].getObjectByName(node);
+  const g = src.clone(true);
+  g.position.set(0, 0, 0); g.rotation.set(0, 0, 0); g.scale.set(1, 1, 1);
+  const { body, accent, dark } = skinMaterials(skin);
+  const map = { Body: body, Accent: accent, Dark: dark };
+  for (const [k, v] of Object.entries(overrides({ body, accent, dark }))) if (v) map[k] = v;
+  g.traverse((o) => { if (o.isMesh && map[o.material.name]) o.material = map[o.material.name]; });
+  const part = (n) => g.getObjectByName(`${node}_${n}`);
+  return { g, part };
 }
 
 function buildAK(skin, optic, skins) {
-  const g = new THREE.Group();
-  const { body: metal, accent: wood, dark } = skinMaterials(skin);
+  const { g, part } = glbWeapon('ak', skin);
   const M = armMaterials(skins);
-
-  // Boîte de culasse + couvercle bombé avec nervures
-  g.add(rbox(0.054, 0.072, 0.42, metal, 0, 0, 0, 0.008));
-  const cover = cyl(0.026, 0.32, dark, 0, 0.034, 0.03); cover.scale.set(1, 1, 0.55); // couvercle arrondi
-  g.add(cover);
-  for (let i = 0; i < 4; i++) g.add(rbox(0.05, 0.004, 0.006, metal, 0, 0.049, 0.12 - i * 0.025, 0.002));
-  // Hausse à planchette (comme une vraie AK) : base, planchette graduée, curseur, et lame à encoche en U
-  const leaf = new THREE.Group();
-  leaf.add(
-    rbox(0.034, 0.006, 0.075, dark, 0, 0, 0.03, 0.002),                         // planchette
-    rbox(0.04, 0.012, 0.016, metal, 0, 0.004, 0.035, 0.003),                    // curseur
-    rbox(0.014, 0.012, 0.006, dark, -0.0105, 0.012, 0.066, 0.0015),             // lame : moitié gauche…
-    rbox(0.014, 0.012, 0.006, dark, 0.0105, 0.012, 0.066, 0.0015),              // …moitié droite (encoche au centre)
-    rbox(0.007, 0.004, 0.006, dark, 0, 0.0075, 0.066, 0.001),                   // fond de l'encoche
-  );
-  for (let i = 0; i < 6; i++) leaf.add(rbox(0.036, 0.0015, 0.002, mat(0xd9d4c4), 0, 0.0032, 0.0 + i * 0.01, 0.0005)); // graduations
-  leaf.position.set(0, 0.066, 0.06); leaf.rotation.x = -0.04;
-  g.add(leaf, rbox(0.05, 0.02, 0.05, dark, 0, 0.045, -0.17, 0.005), rbox(0.04, 0.018, 0.04, dark, 0, 0.056, 0.07, 0.004));
-  // Garde-mains en bois (extrudés, bords arrondis)
-  g.add(extrude([[-0.2, -0.04], [-0.42, -0.034], [-0.43, -0.02], [-0.43, 0.012], [-0.2, 0.012]], 0.052, wood, 0.006));
-  g.add(extrude([[-0.21, 0.018], [-0.4, 0.018], [-0.41, 0.03], [-0.4, 0.05], [-0.22, 0.05], [-0.21, 0.035]], 0.042, wood, 0.006));
-  // Tube de gaz, canon, guidon, frein de bouche
-  g.add(
-    cyl(0.011, 0.24, metal, 0, 0.034, -0.48),
-    cyl(0.0125, 0.4, metal, 0, 0.012, -0.58),
-    rbox(0.03, 0.035, 0.03, dark, 0, 0.022, -0.62, 0.005),        // bloc de guidon
-    rbox(0.02, 0.022, 0.02, dark, 0, 0.048, -0.62, 0.004),        // embase
-    rbox(0.0045, 0.03, 0.0045, dark, 0, 0.069, -0.62, 0.001),     // guidon fin (pointe à 0,084)
-    rbox(0.0035, 0.04, 0.014, dark, -0.012, 0.066, -0.62, 0.001), // "oreilles" de protection
-    rbox(0.0035, 0.04, 0.014, dark, 0.012, 0.066, -0.62, 0.001),
-    cyl(0.019, 0.07, dark, 0, 0.012, -0.8),                        // frein de bouche
-  );
-  // Crosse en bois (profil d'AK) + plaque de couche
-  g.add(extrude([[0.17, 0.028], [0.45, -0.005], [0.46, -0.012], [0.46, -0.1], [0.44, -0.105], [0.3, -0.062], [0.19, -0.036], [0.17, -0.03]], 0.044, wood, 0.007));
-  g.add(rbox(0.05, 0.1, 0.012, dark, 0, -0.054, 0.46, 0.004));
-  // Poignée pistolet + pontet + détente
-  g.add(extrude([[0.085, -0.035], [0.14, -0.035], [0.17, -0.15], [0.165, -0.16], [0.13, -0.163], [0.12, -0.15], [0.095, -0.05]], 0.034, wood, 0.006));
-  g.add(extrude([[0.0, -0.034], [0.08, -0.034], [0.085, -0.04], [0.08, -0.075], [0.02, -0.075], [0.0, -0.06], [0.006, -0.06], [0.022, -0.068], [0.074, -0.068], [0.076, -0.04], [0.0, -0.04]], 0.012, dark, 0.002));
-  g.add(rbox(0.006, 0.026, 0.008, dark, 0, -0.05, 0.045, 0.002));
   // Levier d'armement (côté droit, animable)
-  const charge = new THREE.Group();
-  charge.add(rbox(0.024, 0.012, 0.03, dark, 0.034, 0.03, 0, 0.004));
-  charge.position.z = -0.04;
-  g.add(charge);
-  g.userData.charge = charge; g.userData.chargeZ = -0.04;
-
-  // Chargeur courbe "banane" (séparé pour l'animation de rechargement)
-  const mag = new THREE.Group();
-  mag.add(extrude([[-0.03, 0], [0.03, 0], [0.045, -0.06], [0.03, -0.13], [0.0, -0.19], [-0.06, -0.185], [-0.04, -0.12], [-0.03, -0.06]], 0.034, dark, 0.005));
-  mag.position.set(0, -0.034, -0.07);
-  g.add(mag);
-  g.userData.mag = mag; g.userData.magHome = mag.position.clone();
-
+  const charge = part('charge');
+  Object.assign(g.userData, { charge, chargeZ: charge.position.z });
+  // Chargeur banane (séparé pour le rechargement irakien)
+  const mag = part('mag');
+  Object.assign(g.userData, { mag, magHome: mag.position.clone() });
   // Rail + viseur
-  if (optic !== 'iron') g.add(rbox(0.026, 0.01, 0.15, dark, 0, 0.055, 0.02, 0.003));
+  part('rail').visible = optic !== 'iron';
   g.userData.sightY = addOptic(g, optic, 0.06, 0.02) ?? 0.084;
-
-  // --- Détails ---
-  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
-  // Rivets du boîtier (des deux côtés)
-  for (const x of [-0.028, 0.028]) for (const [y, z] of [[-0.02, -0.15], [-0.02, -0.1], [0.015, -0.17], [-0.02, 0.14], [0.012, 0.16], [-0.025, 0.06]]) {
-    const r = new THREE.Mesh(new THREE.SphereGeometry(0.0035, 8, 6), steel); r.position.set(x, y, z); r.scale.x = 0.5; g.add(r);
-  }
-  // Sélecteur de tir (levier sur le côté droit) + fenêtre d'éjection
-  g.add(extrude([[-0.12, 0.022], [0.08, 0.026], [0.1, 0.01], [0.09, 0.004], [-0.12, 0.012]], 0.004, steel, 0.0015));
-  g.children[g.children.length - 1].position.x = 0.03;
-  g.add(rbox(0.004, 0.018, 0.09, mat(0x0e0f12, { roughness: 0.9 }), 0.0275, 0.018, -0.02, 0.001)); // fenêtre d'éjection
-  // Nervures du chargeur + bouton de chargeur
-  for (let i = 0; i < 3; i++) mag.add(rbox(0.038, 0.006, 0.05, dark, 0, -0.04 - i * 0.045, -0.006 - i * 0.008, 0.002));
-  g.add(rbox(0.03, 0.012, 0.012, steel, 0, -0.04, -0.03, 0.003)); // arrêtoir de chargeur
-  // Fentes du frein de bouche, bague de garde-main, anneaux de bretelle
-  for (let i = 0; i < 3; i++) g.add(rbox(0.04, 0.004, 0.008, mat(0x0b0c0e), 0, 0.022, -0.79 - i * 0.016, 0.001));
-  g.add(cyl(0.032, 0.012, steel, 0, -0.008, -0.2, 0.032));
-  g.add(new THREE.Mesh(new THREE.TorusGeometry(0.012, 0.0025, 6, 14), steel).translateX(-0.028).translateY(-0.03).translateZ(0.38));
-  g.children[g.children.length - 1].rotation.y = Math.PI / 2;
-  // Vis du garde-main + baïonnette (tenon)
-  g.add(cyl(0.006, 0.054, steel, 0, -0.012, -0.3).rotateY(Math.PI / 2));
-  g.add(rbox(0.012, 0.012, 0.05, steel, 0, -0.008, -0.7, 0.003));
-  // Fenêtre d'éjection (point de sortie des douilles)
-  const port = new THREE.Object3D(); port.position.set(0.035, 0.02, -0.02); g.add(port); g.userData.ejectPort = port;
+  g.userData.ejectPort = part('ejectPort');
 
   rightGripHand(g, M, [0.032, -0.09, 0.128], [0.17, -0.36, 0.58], 0.35);
   // Chargeur neuf tenu par la main droite pendant le rechargement irakien
@@ -1322,236 +1333,60 @@ function buildAK(skin, optic, skins) {
 }
 
 function buildKar(skin, optic, skins) {
-  const g = new THREE.Group();
-  const { body: metal, accent: wood, dark } = skinMaterials(skin);
+  const { g, part } = glbWeapon('kar98k', skin);
   const M = armMaterials(skins);
-
-  // Crosse complète en une pièce (profil classique du Kar98k)
-  g.add(extrude([
-    [0.47, -0.012], [0.3, -0.006], [0.2, -0.016], [0.14, -0.012], [-0.62, -0.006], [-0.645, -0.02], [-0.645, -0.044],
-    [-0.5, -0.052], [-0.1, -0.058], [0.03, -0.062], [0.11, -0.058], [0.19, -0.072], [0.47, -0.152],
-  ], 0.05, wood, 0.008));
-  g.add(rbox(0.054, 0.14, 0.012, dark, 0, -0.082, 0.472, 0.004)); // plaque de couche
-  // Boîtier rond, canon, bagues, guidon
-  g.add(
-    cyl(0.021, 0.3, metal, 0, 0.012, 0.0),
-    cyl(0.013, 0.42, metal, 0, 0.012, -0.78),
-    cyl(0.016, 0.04, dark, 0, 0.012, -0.98),
-    cyl(0.03, 0.02, dark, 0, -0.01, -0.45, 0.03),   // bague
-    cyl(0.03, 0.025, dark, 0, -0.008, -0.6, 0.03),  // bague avant
-    rbox(0.022, 0.03, 0.04, dark, 0, -0.002, 0.07, 0.004),
-  );
-  // Pontet + détente
-  g.add(extrude([[0.0, -0.06], [0.09, -0.06], [0.095, -0.07], [0.08, -0.1], [0.02, -0.1], [0.0, -0.08], [0.008, -0.08], [0.024, -0.093], [0.076, -0.093], [0.085, -0.068], [0.0, -0.068]], 0.012, dark, 0.002));
-  g.add(rbox(0.006, 0.026, 0.008, dark, 0, -0.075, 0.05, 0.002));
-
-  // Levier de culasse avec boule (bouge pendant le réarmement / rechargement)
-  const bolt = new THREE.Group();
-  bolt.add(capsule([0, 0, 0], [0.06, -0.01, 0], 0.006, metal));
-  const knob = new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 10), metal);
-  knob.position.set(0.065, -0.012, 0);
-  bolt.add(knob);
-  bolt.position.set(0.02, 0.012, 0.07);
-  g.add(bolt);
-  g.userData.bolt = bolt;
-  g.userData.boltZ = 0.07;
-
-  // Fenêtre de chargement sur le dessus : quand la culasse recule, on voit les balles
-  // dans le magasin, et celle du dessus partir dans la chambre quand on referme.
-  const shiny = mat(0xb9bec6, { metalness: 0.9, roughness: 0.22 });
-  const brassM = mat(0xc9a04a, { metalness: 0.85, roughness: 0.3 });
-  const tipM = mat(0xa8652f, { metalness: 0.7, roughness: 0.35 });
-  g.add(
-    rbox(0.02, 0.003, 0.085, dark, 0, 0.034, -0.005, 0.001),            // fond de la fenêtre
-    rbox(0.004, 0.013, 0.085, metal, 0.0115, 0.04, -0.005, 0.0015),     // bords
-    rbox(0.004, 0.013, 0.085, metal, -0.0115, 0.04, -0.005, 0.0015),
-  );
-  const makeRound = () => {
-    const r = new THREE.Group();
-    r.add(cyl(0.0052, 0.042, brassM, 0, 0, 0.006), cyl(0.0034, 0.018, tipM, 0, 0, -0.024, 0.0014));
-    return r;
-  };
-  const magRounds = [makeRound(), makeRound()];
-  magRounds[0].position.set(0.0028, 0.0405, -0.005);
-  magRounds[1].position.set(-0.0035, 0.0385, -0.003);
-  for (const r of magRounds) { r.visible = false; g.add(r); }
-  const chamberRound = makeRound(); chamberRound.visible = false; g.add(chamberRound);
-  // Corps de culasse brillant qui glisse au-dessus de la fenêtre
-  const boltBody = new THREE.Group();
-  boltBody.add(rbox(0.021, 0.012, 0.1, shiny, 0, 0, 0, 0.004), rbox(0.006, 0.003, 0.08, dark, 0.006, 0.006, 0, 0.001));
-  boltBody.position.set(0, 0.039, -0.005); // le dessus reste sous la ligne de visée
-  g.add(boltBody);
-  Object.assign(g.userData, { magRounds, chamberRound, boltBody, boltBodyZ: -0.005 });
-
-  // Organes de visée d'origine (mire)
-  if (optic === 'iron') {
-    g.add(
-      rbox(0.034, 0.012, 0.05, dark, 0, 0.031, -0.12, 0.004),                     // base de la hausse
-      rbox(0.03, 0.005, 0.04, metal, 0, 0.039, -0.115, 0.0015),                   // planchette
-    );
-    // Hausse à cran en V : deux demi-lames inclinées
-    for (const sx of [-1, 1]) {
-      const half = rbox(0.016, 0.012, 0.005, dark, sx * 0.0085, 0.046, -0.1, 0.001);
-      half.rotation.z = sx * -0.45;
-      g.add(half);
-    }
-    // Guidon "grain d'orge" (triangle fin) sous un tunnel de protection
-    g.add(rbox(0.03, 0.014, 0.024, dark, 0, 0.027, -0.96, 0.004));
-    const post = new THREE.Mesh(new THREE.ConeGeometry(0.0045, 0.02, 4), dark);
-    post.position.set(0, 0.039, -0.96); post.rotation.y = Math.PI / 4; g.add(post);   // pointe à 0,049
-    const hoodK = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.0025, 6, 16, Math.PI), dark);
-    hoodK.position.set(0, 0.034, -0.96); g.add(hoodK);
-  }
+  // Levier de culasse avec boule + corps de culasse brillant
+  const bolt = part('bolt'), boltBody = part('boltBody');
+  // Balles du magasin (visibles quand la fenêtre est ouverte) + balle chambrée
+  const magRounds = [part('magRound0'), part('magRound1')];
+  const chamberRound = part('chamberRound');
+  for (const r of [...magRounds, chamberRound]) r.visible = false;
+  Object.assign(g.userData, { bolt, boltZ: bolt.position.z, magRounds, chamberRound, boltBody, boltBodyZ: boltBody.position.z });
+  // Mire d'origine seulement sans viseur
+  part('irons').visible = optic === 'iron';
   g.userData.sightY = addOptic(g, optic, 0.054, -0.02) ?? 0.049; // le montage passe au-dessus de la culasse
-
-  // --- Détails ---
-  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
-  g.add(
-    cyl(0.017, 0.06, steel, 0, 0.012, 0.18),                         // arrière de culasse (manchon)
-    rbox(0.012, 0.016, 0.03, steel, 0, 0.028, 0.2, 0.003),            // sûreté à drapeau
-    rbox(0.004, 0.02, 0.07, mat(0x0e0f12, { roughness: 0.9 }), 0.021, 0.02, 0.02, 0.001), // fenêtre d'éjection
-    cyl(0.004, 0.32, steel, 0, -0.024, -0.82),                       // baguette de nettoyage
-    rbox(0.02, 0.008, 0.18, steel, 0, -0.06, 0.01, 0.002),            // plaque de fond de magasin
-  );
-  // Anneaux de bretelle + vis
-  for (const z of [-0.45, 0.32]) {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.011, 0.0022, 6, 14), steel);
-    ring.position.set(-0.03, -0.055, z); ring.rotation.y = Math.PI / 2; g.add(ring);
-  }
-  for (const z of [-0.03, 0.12]) g.add(cyl(0.005, 0.054, steel, 0, -0.048, z).rotateY(Math.PI / 2));
-  // Balle tenue par la main gauche pendant le rechargement (une par une)
-  const brass = mat(0xc9a04a, { metalness: 0.85, roughness: 0.3 });
-  const cart = new THREE.Group();
-  cart.add(cyl(0.0062, 0.057, brass, 0, 0, 0), cyl(0.004, 0.022, mat(0xb07a3a, { metalness: 0.7, roughness: 0.35 }), 0, 0, -0.038, 0.0018));
-  cart.rotation.y = 0.15;
-  // Fenêtre d'éjection
-  const port = new THREE.Object3D(); port.position.set(0.03, 0.022, 0.03); g.add(port); g.userData.ejectPort = port;
+  g.userData.ejectPort = part('ejectPort');
 
   rightGripHand(g, M, [0.032, -0.058, 0.155], [0.17, -0.36, 0.6], 0.15);
   leftSupportHand(g, M, [0, -0.075, -0.33], [-0.26, -0.45, 0.04]);
+  // Balle tenue par la main gauche pendant le rechargement (une par une)
+  const cart = part('cartridge');
+  g.userData.leftHand.add(cart);
   cart.position.set(0.012, 0.028, 0.0);
   cart.visible = false;
-  g.userData.leftHand.add(cart);
   g.userData.cartridge = cart;
   g.userData.knobGrip = new THREE.Vector3(0.012, -0.022, 0.012);
   muzzleFlash(g, -1.02, 0.28);
   return g;
 }
 
-// ---------------------------------------------------------------------
-//  MP5 : mitraillette compacte. Boîtier en tôle, garde-main nervuré,
-//  levier d'armement à gauche (la fameuse "claque"), crosse rétractable.
-// ---------------------------------------------------------------------
+// MP5 : levier d'armement à gauche (la fameuse "claque"), crosse rétractable.
 function buildMP5(skin, optic, skins) {
-  const g = new THREE.Group();
-  const { body: metal, accent, dark } = skinMaterials(skin);
+  const std = skin === WEAPON_SKINS.default;
+  const { g, part } = glbWeapon('mp5', skin, (m) => ({ Poly: std ? null : m.accent })); // polymère noir d'origine
   const M = armMaterials(skins);
-  const black = mat(0x15171b, { roughness: 0.75 });
-  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
-  const poly = skin === WEAPON_SKINS.default ? mat(0x202329, { roughness: 0.7 }) : accent; // polymère noir d'origine
-
-  // Boîtier en tôle emboutie + arête supérieure + soudures
-  g.add(rbox(0.05, 0.062, 0.34, metal, 0, 0.018, -0.02, 0.01));
-  g.add(rbox(0.024, 0.014, 0.33, metal, 0, 0.054, -0.025, 0.005));
-  for (const x of [-0.0255, 0.0255]) for (const z of [-0.15, -0.06, 0.05, 0.12]) g.add(rbox(0.002, 0.012, 0.012, steel, x, 0.012, z, 0.002));
-  // Garde-main nervuré (polymère)
-  g.add(rbox(0.058, 0.056, 0.17, poly, 0, -0.006, -0.28, 0.014));
-  for (const x of [-0.029, 0.029]) for (let i = 0; i < 4; i++) g.add(rbox(0.004, 0.006, 0.13, black, x, -0.022 + i * 0.012, -0.28, 0.002));
-  // Tube d'armement au-dessus du canon, canon, tri-lug, guidon cerclé
-  g.add(cyl(0.011, 0.24, metal, 0, 0.048, -0.27));
-  g.add(cyl(0.01, 0.12, steel, 0, 0.012, -0.41), cyl(0.016, 0.036, dark, 0, 0.012, -0.45));
-  for (let i = 0; i < 3; i++) { const lug = rbox(0.01, 0.012, 0.03, dark, 0, 0, 0, 0.003); const a = i * 2.09; lug.position.set(Math.cos(a) * 0.017, 0.012 + Math.sin(a) * 0.017, -0.45); lug.rotation.z = a; g.add(lug); }
-  g.add(rbox(0.016, 0.03, 0.02, dark, 0, 0.066, -0.365, 0.004));
-  const hood = new THREE.Mesh(new THREE.TorusGeometry(0.014, 0.0035, 6, 18), dark); hood.position.set(0, 0.085, -0.365); g.add(hood);
-  g.add(rbox(0.003, 0.016, 0.003, dark, 0, 0.08, -0.365, 0.001));             // guidon dans le cercle (pointe à 0,088)
-  // Hausse à tambour : on vise à travers le petit trou (iron)
-  if (optic === 'iron') {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.0085, 0.0035, 8, 20), dark);
-    ring.position.set(0, 0.088, 0.11); g.add(ring);
-    g.add(rbox(0.026, 0.024, 0.016, dark, 0, 0.068, 0.11, 0.004));
-    for (const x of [-0.011, 0.011]) g.add(rbox(0.004, 0.022, 0.012, dark, x, 0.082, 0.11, 0.001));
-  }
-  // Levier d'armement à gauche, à l'avant (animable)
-  const charge = new THREE.Group();
-  charge.add(rbox(0.032, 0.01, 0.012, black, -0.026, 0.048, 0, 0.004), rbox(0.012, 0.014, 0.016, black, -0.044, 0.048, 0, 0.004));
-  charge.position.z = -0.33;
-  g.add(charge);
-  Object.assign(g.userData, { charge, chargeZ: -0.33, chargeTravel: 0.07 });
-  // Puits de chargeur + chargeur légèrement courbé (animable)
-  g.add(rbox(0.04, 0.04, 0.06, metal, 0, -0.025, -0.12, 0.006));
-  const mag = new THREE.Group();
-  mag.add(extrude([[-0.024, 0], [0.024, 0], [0.032, -0.08], [0.03, -0.17], [-0.018, -0.17], [-0.016, -0.08]], 0.026, black, 0.004));
-  for (let i = 0; i < 3; i++) mag.add(rbox(0.028, 0.004, 0.036, dark, 0, -0.05 - i * 0.04, 0.004 + i * 0.002, 0.0015));
-  mag.position.set(0, -0.04, -0.12);
-  g.add(mag);
-  g.userData.mag = mag; g.userData.magHome = mag.position.clone();
-  // Poignée + pontet + détente + sélecteur
-  g.add(extrude([[0.04, -0.012], [0.095, -0.012], [0.12, -0.13], [0.115, -0.14], [0.08, -0.142], [0.07, -0.13], [0.05, -0.03]], 0.036, poly, 0.006));
-  g.add(extrude([[-0.02, -0.012], [0.05, -0.012], [0.05, -0.02], [0.045, -0.06], [-0.01, -0.06], [-0.02, -0.04], [-0.012, -0.04], [0.0, -0.052], [0.04, -0.052], [0.042, -0.02], [-0.02, -0.02]], 0.014, poly, 0.002));
-  g.add(rbox(0.006, 0.024, 0.008, dark, 0, -0.03, 0.02, 0.002));
-  g.add(rbox(0.004, 0.014, 0.022, steel, 0.027, -0.002, 0.06, 0.002));
-  // Crosse rétractable : 2 rails + plaque de couche
-  for (const x of [-0.019, 0.019]) g.add(cyl(0.0055, 0.2, steel, x, 0.02, 0.24));
-  g.add(rbox(0.06, 0.1, 0.022, black, 0, -0.01, 0.345, 0.008), rbox(0.05, 0.012, 0.03, steel, 0, 0.022, 0.15, 0.003));
-  // Fenêtre d'éjection (droite)
-  g.add(rbox(0.004, 0.018, 0.05, black, 0.0255, 0.03, -0.06, 0.001));
-  const port = new THREE.Object3D(); port.position.set(0.035, 0.03, -0.06); g.add(port); g.userData.ejectPort = port;
-
-  // Montage pour viseur (griffes)
-  if (optic !== 'iron') g.add(rbox(0.03, 0.012, 0.12, dark, 0, 0.066, 0.0, 0.003));
+  const charge = part('charge');
+  Object.assign(g.userData, { charge, chargeZ: charge.position.z, chargeTravel: 0.07 });
+  const mag = part('mag');
+  Object.assign(g.userData, { mag, magHome: mag.position.clone() });
+  part('irons').visible = optic === 'iron';   // hausse à tambour
+  part('rail').visible = optic !== 'iron';    // griffes pour viseur
   g.userData.sightY = addOptic(g, optic, 0.072, 0.0) ?? 0.088;
+  g.userData.ejectPort = part('ejectPort');
   rightGripHand(g, M, [0.032, -0.07, 0.088], [0.17, -0.36, 0.52], 0.35);
   leftSupportHand(g, M, [0, -0.052, -0.28], [-0.26, -0.42, 0.02]);
   muzzleFlash(g, -0.48, 0.17);
   return g;
 }
 
-// ---------------------------------------------------------------------
-//  M870 : fusil à pompe. La pompe (avec la main gauche) glisse d'avant en
-//  arrière ; cartouches rouges chargées une par une par-dessous.
-// ---------------------------------------------------------------------
+// M870 : la pompe (avec la main gauche) glisse ; cartouches rouges chargées par-dessous.
 function buildShotgun(skin, optic, skins) {
-  const g = new THREE.Group();
-  const { body: metal, accent: wood, dark } = skinMaterials(skin);
+  const { g, part } = glbWeapon('shotgun', skin);
   const M = armMaterials(skins);
-  const black = mat(0x121418, { roughness: 0.8 });
-  const steel = mat(0x2a2d33, { metalness: 0.75, roughness: 0.35 });
-
-  // Carcasse + fenêtre d'éjection + fenêtre de chargement dessous
-  g.add(rbox(0.052, 0.074, 0.22, metal, 0, 0.004, 0.0, 0.01));
-  g.add(rbox(0.004, 0.026, 0.07, black, 0.026, 0.012, -0.02, 0.001));
-  g.add(rbox(0.03, 0.004, 0.11, black, 0, -0.033, 0.0, 0.001));
-  g.add(cyl(0.004, 0.06, steel, 0, 0.042, 0.0));                                // rainure du dessus
-  // Canon + guidon à bille + tube magasin + collier
-  g.add(cyl(0.0135, 0.52, steel, 0, 0.026, -0.37));
-  const bead = new THREE.Mesh(new THREE.SphereGeometry(0.004, 8, 6), mat(0xe8e4d8, { metalness: 0.8, roughness: 0.2 }));
-  bead.position.set(0, 0.043, -0.62); g.add(bead);
-  g.add(cyl(0.0125, 0.44, metal, 0, -0.008, -0.33), cyl(0.014, 0.03, dark, 0, -0.008, -0.56));
-  g.add(rbox(0.03, 0.05, 0.02, dark, 0, 0.012, -0.55, 0.005));                   // collier canon/magasin
-  // Pompe en bois nervurée (animable) + barres de liaison
-  const forend = new THREE.Group();
-  forend.add(rbox(0.054, 0.05, 0.17, wood, 0, -0.01, 0, 0.016));
-  for (let i = 0; i < 7; i++) for (const x of [-0.0272, 0.0272]) forend.add(rbox(0.003, 0.034, 0.006, dark, x, -0.01, -0.07 + i * 0.023, 0.001));
-  for (const x of [-0.017, 0.017]) forend.add(cyl(0.003, 0.17, steel, x, -0.004, 0.16));
-  forend.position.z = -0.25;
-  g.add(forend);
-  Object.assign(g.userData, { forend, forendZ: -0.25 });
-  // Crosse (bois) + poignée + plaque de couche
-  // (le dessus de la crosse reste sous la ligne de visée)
-  g.add(extrude([[0.1, 0.03], [0.16, 0.012], [0.44, -0.012], [0.45, -0.022], [0.45, -0.13], [0.43, -0.135], [0.24, -0.085], [0.16, -0.08], [0.12, -0.05], [0.1, -0.035]], 0.044, wood, 0.008));
-  g.add(rbox(0.05, 0.115, 0.014, black, 0, -0.077, 0.456, 0.005));
-  // Pontet + détente + sécurité
-  g.add(extrude([[0.02, -0.032], [0.1, -0.032], [0.105, -0.04], [0.095, -0.07], [0.035, -0.07], [0.02, -0.055], [0.028, -0.055], [0.04, -0.062], [0.09, -0.062], [0.095, -0.04], [0.02, -0.04]], 0.014, dark, 0.002));
-  g.add(rbox(0.006, 0.024, 0.008, dark, 0, -0.045, 0.062, 0.002), rbox(0.04, 0.006, 0.006, steel, 0, -0.035, 0.09, 0.002));
-  // Fenêtre d'éjection (douilles rouges)
-  const port = new THREE.Object3D(); port.position.set(0.034, 0.014, -0.02); g.add(port); g.userData.ejectPort = port;
-
-  // Cartouche tenue par la main gauche pendant le rechargement
-  const hull = new THREE.Group();
-  hull.add(cyl(0.0105, 0.05, mat(0xb3261e, { roughness: 0.55 }), 0, 0, -0.006), cyl(0.011, 0.014, mat(0xc9a04a, { metalness: 0.85, roughness: 0.3 }), 0, 0, 0.024));
-  hull.visible = false;
-
-  if (optic !== 'iron') g.add(rbox(0.026, 0.01, 0.14, dark, 0, 0.044, 0.0, 0.003));
+  const forend = part('forend');
+  Object.assign(g.userData, { forend, forendZ: forend.position.z });
+  g.userData.ejectPort = part('ejectPort');
+  part('rail').visible = optic !== 'iron';
   g.userData.sightY = addOptic(g, optic, 0.048, 0.0) ?? 0.043;
   rightGripHand(g, M, [0.03, -0.055, 0.165], [0.17, -0.36, 0.6], 0.75);
   leftSupportHand(g, M, [0, -0.058, -0.25], [-0.26, -0.44, 0.04]);
@@ -1560,77 +1395,25 @@ function buildShotgun(skin, optic, skins) {
   g.remove(lh); forend.add(lh);
   lh.position.set(0, -0.048, 0);
   g.userData.leftHome = lh.position.clone();
-  hull.position.set(0.0, 0.03, 0.0);
+  // Cartouche tenue par la main gauche pendant le rechargement
+  const hull = part('hull');
   lh.add(hull);
+  hull.position.set(0.0, 0.03, 0.0);
+  hull.visible = false;
   g.userData.cartridge = hull;
   muzzleFlash(g, -0.65, 0.3);
   return g;
 }
 
 function buildGlock(skin, skins) {
-  const g = new THREE.Group();
-  const { body: poly, dark } = skinMaterials(skin);
+  const { g, part } = glbWeapon('glock', skin);   // Body = carcasse en polymère (couleur du skin)
   const M = armMaterials(skins);
-  const steel = mat(0x23262b, { metalness: 0.7, roughness: 0.38 });
-  const black = mat(0x0c0d10, { roughness: 0.9 });
-
-  // Culasse (animée : recule à chaque tir)
-  const slide = new THREE.Group();
-  slide.add(rbox(0.026, 0.03, 0.19, steel, 0, 0, 0, 0.004));
-  // Stries de préhension à l'arrière (des deux côtés)
-  for (const x of [-0.0132, 0.0132]) for (let i = 0; i < 7; i++) slide.add(rbox(0.002, 0.022, 0.0025, black, x, -0.001, 0.07 - i * 0.006, 0.0005));
-  // Fenêtre d'éjection + canon visible, guidon et hausse
-  slide.add(
-    rbox(0.012, 0.004, 0.04, black, 0.004, 0.0145, -0.01, 0.001),
-    rbox(0.004, 0.008, 0.006, steel, 0, 0.019, -0.088, 0.001),                 // guidon
-    rbox(0.008, 0.009, 0.008, steel, -0.0075, 0.0195, 0.085, 0.001),           // hausse (2 montants → encoche)
-    rbox(0.008, 0.009, 0.008, steel, 0.0075, 0.0195, 0.085, 0.001),
-    rbox(0.002, 0.002, 0.002, mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.6 }), 0, 0.023, -0.088, 0.0005), // point blanc
-    // hausse : contour blanc de l'encoche en U (comme les vraies mires Glock)
-    rbox(0.0022, 0.0022, 0.002, mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.5 }), -0.0062, 0.0205, 0.0811, 0.0005),
-    rbox(0.0022, 0.0022, 0.002, mat(0xffffff, { emissive: 0xffffff, emissiveIntensity: 0.5 }), 0.0062, 0.0205, 0.0811, 0.0005),
-  );
-  const bore = cyl(0.0045, 0.004, black, 0, -0.004, -0.0955); slide.add(bore);
-  // Stries avant, extracteur, chanfrein du nez de culasse, gravure
-  for (const x of [-0.0132, 0.0132]) for (let i = 0; i < 5; i++) slide.add(rbox(0.002, 0.016, 0.0022, black, x, 0.001, -0.06 - i * 0.006, 0.0005));
-  slide.add(rbox(0.0022, 0.004, 0.022, steel, 0.0133, 0.006, 0.0, 0.0008));                  // extracteur
-  slide.add(rbox(0.024, 0.004, 0.014, black, 0, -0.012, -0.089, 0.001));                     // chanfrein
-  slide.add(rbox(0.0015, 0.006, 0.03, mat(0x4a4f58, { metalness: 0.6 }), -0.0133, 0.002, 0.03, 0.0005)); // gravure (côté gauche)
-  slide.position.set(0, 0.012, -0.02);
-  g.add(slide);
-  g.userData.slide = slide; g.userData.slideZ = -0.02;
-  const port = new THREE.Object3D(); port.position.set(0.016, 0.016, -0.01); slide.add(port); g.userData.ejectPort = port;
-
-  // Carcasse en polymère : rail, pontet, poignée inclinée avec texture
-  g.add(extrude([
-    [-0.11, -0.003], [0.075, -0.003], [0.08, -0.012], [0.1, -0.115], [0.094, -0.125], [0.045, -0.125], [0.04, -0.112],
-    [0.03, -0.035], [0.0, -0.032], [-0.005, -0.05], [-0.038, -0.05], [-0.042, -0.024], [-0.11, -0.02],
-  ], 0.027, poly, 0.004));
-  g.add(extrude([[-0.034, -0.044], [0.0, -0.044], [0.0, -0.05], [-0.036, -0.05]], 0.022, poly, 0.002)); // bas du pontet
-  g.add(rbox(0.005, 0.02, 0.007, black, 0, -0.03, -0.012, 0.0015));       // détente (avec sécurité)
-  g.add(rbox(0.016, 0.006, 0.045, poly, 0, -0.022, -0.08, 0.002));        // rail
-  for (let i = 0; i < 3; i++) g.add(rbox(0.018, 0.004, 0.004, black, 0, -0.026, -0.065 - i * 0.012, 0.001));
-  g.add(rbox(0.006, 0.006, 0.012, black, 0.014, -0.022, 0.005, 0.0015));  // arrêtoir de culasse
-  g.add(rbox(0.01, 0.008, 0.008, black, 0.013, -0.035, 0.034, 0.002));    // bouton de chargeur
-  g.add(rbox(0.03, 0.004, 0.01, black, 0, -0.012, -0.02, 0.001));          // levier de démontage
-  // Ondulations pour les doigts sur l'avant de la poignée + queue de castor
-  for (let i = 0; i < 3; i++) { const bump = rbox(0.024, 0.012, 0.008, poly, 0, -0.05 - i * 0.024, 0.04 + i * 0.005, 0.004); bump.rotation.x = -0.2; g.add(bump); }
-  g.add(rbox(0.024, 0.008, 0.02, poly, 0, -0.006, 0.085, 0.004));
-  // Texture du dos de la poignée
-  for (let i = 0; i < 6; i++) { const t = rbox(0.022, 0.002, 0.004, dark, 0, -0.03 - i * 0.014, 0.096 + i * 0.0028, 0.0006); t.rotation.x = -0.2; g.add(t); }
-  // Texture granuleuse de la poignée (plaquettes)
-  for (const x of [-0.0138, 0.0138]) {
-    const grip = rbox(0.002, 0.07, 0.04, dark, x, -0.07, 0.065, 0.001);
-    grip.rotation.x = -0.2; g.add(grip);
-  }
-  // Chargeur (séparé pour le rechargement) avec talon
-  const mag = new THREE.Group();
-  mag.add(rbox(0.02, 0.1, 0.03, black, 0, -0.05, 0, 0.003), rbox(0.026, 0.012, 0.04, poly, 0, -0.104, 0.002, 0.003));
-  mag.rotation.x = -0.2;
-  mag.position.set(0, -0.02, 0.058);
-  g.add(mag);
-  g.userData.mag = mag; g.userData.magHome = mag.position.clone();
-
+  // Culasse (recule à chaque tir) + fenêtre d'éjection qui la suit
+  const slide = part('slide');
+  Object.assign(g.userData, { slide, slideZ: slide.position.z, ejectPort: part('ejectPort') });
+  // Chargeur (l'inclinaison de la poignée est dans le modèle)
+  const mag = part('mag');
+  Object.assign(g.userData, { mag, magHome: mag.position.clone() });
   g.userData.sightY = 0.034;
   // Prise à deux mains : la main droite sur la poignée, la gauche par-dessus
   rightGripHand(g, M, [0.03, -0.06, 0.078], [0.13, -0.3, 0.42], 0.2);
@@ -1641,49 +1424,13 @@ function buildGlock(skin, skins) {
 
 /**
  * Couteau papillon (balisong) : une lame et deux manches ajourés qui pivotent
- * sur deux goupilles. Tout l'ensemble peut tourner autour de l'annulaire.
+ * sur deux goupilles. Tout l'ensemble tourne autour de l'annulaire (spin).
  */
 function buildButterfly(skin, skinId, skins) {
-  const g = new THREE.Group();
-  const M = armMaterials(skins);
-  const { body, accent, dark } = skinMaterials(skin);
   const std = !skinId || skinId === 'default';
-  const bladeMat = std ? mat(0xd9dee6, { metalness: 0.95, roughness: 0.16 }) : body;
-  const handleMat = std ? mat(0x2b2f37, { metalness: 0.8, roughness: 0.3 }) : accent;
-  const pinMat = mat(0xc9a04a, { metalness: 0.9, roughness: 0.25 });
-
-  // Pivot = l'annulaire : tout tourne autour
-  const spin = new THREE.Group();
-  spin.position.set(0, -0.004, 0.06);
-  g.add(spin);
-  const knife = new THREE.Group();
-  knife.position.set(0, 0.004, -0.06);
-  spin.add(knife);
-
-  // Lame "tanto" avec gorge (fuller) et dos aiguisé
-  knife.add(
-    extrude([[0.0, 0.009], [0.0, -0.009], [-0.12, -0.009], [-0.15, 0.0], [-0.135, 0.009]], 0.0045, bladeMat, 0.001),
-    rbox(0.0048, 0.003, 0.08, mat(0x9aa3b0, { metalness: 0.9, roughness: 0.3 }), 0, 0.002, -0.055, 0.0008),
-    rbox(0.006, 0.02, 0.016, bladeMat, 0, 0, 0.004, 0.002),                       // talon (tang)
-  );
-  // Deux manches qui pivotent sur des goupilles (côté dos et côté tranchant)
-  const handle = (side) => {
-    const h = new THREE.Group();
-    h.position.set(0, side * 0.0105, 0.006);
-    const bar = new THREE.Group();
-    bar.add(rbox(0.016, 0.0065, 0.13, handleMat, 0, 0, 0.065, 0.0025));
-    for (let i = 0; i < 5; i++) bar.add(rbox(0.0168, 0.0035, 0.012, dark, 0, side * 0.0005, 0.02 + i * 0.022, 0.001)); // ajours
-    bar.add(cyl(0.0035, 0.018, pinMat, 0, 0, 0.0).rotateY(Math.PI / 2));        // goupille
-    bar.add(rbox(0.017, 0.006, 0.01, pinMat, 0, 0, 0.128, 0.002));              // embout
-    h.add(bar);
-    knife.add(h);
-    return h;
-  };
-  const handleA = handle(1), handleB = handle(-1);
-  // Loquet au bout du manche "sûr"
-  const latch = rbox(0.006, 0.004, 0.025, pinMat, 0, 0.004, 0.135, 0.001);
-  handleA.add(latch);
-  Object.assign(g.userData, { spin, handleA, handleB, blade: knife });
+  const { g, part } = glbWeapon('butterfly', skin, (m) => (std ? {} : { Blade: m.body, Handle: m.accent }));
+  const M = armMaterials(skins);
+  Object.assign(g.userData, { spin: part('spin'), handleA: part('handleA'), handleB: part('handleB'), blade: part('knife') });
 
   // Main : l'annulaire sert d'axe
   const handG = new THREE.Group();
@@ -1700,22 +1447,11 @@ function buildButterfly(skin, skinId, skins) {
 }
 
 function buildKnife(skin, skinId, skins) {
-  const g = new THREE.Group();
-  const M = armMaterials(skins);
-  const { body, accent } = skinMaterials(skin);
+  const std = !skinId || skinId === 'default';
   // Lame en acier pour le skin standard, sinon couleur du skin
-  const bladeMat = !skinId || skinId === 'default' ? mat(0xd8dee9, { metalness: 0.9, roughness: 0.2 }) : body;
-
-  // La lame + le manche forment un groupe qui peut tourner/s'envoler (animations)
-  const blade = new THREE.Group();
-  blade.add(
-    extrude([[0.0, 0.014], [0.0, -0.012], [-0.16, -0.012], [-0.235, 0.004], [-0.2, 0.012], [-0.13, 0.018], [-0.02, 0.018]], 0.006, bladeMat, 0.0015), // lame (pointe)
-    rbox(0.026, 0.05, 0.014, mat(0x444a55, { metalness: 0.6 }), 0, 0, -0.006, 0.004),                     // garde
-    extrude([[0.005, -0.016], [0.03, -0.02], [0.05, -0.016], [0.072, -0.021], [0.11, -0.018], [0.128, -0.012], [0.128, 0.013], [0.005, 0.016]], 0.026, accent, 0.006), // manche avec crans pour les doigts
-    cyl(0.008, 0.01, mat(0x444a55, { metalness: 0.6 }), 0, 0, 0.132),                                     // pommeau
-  );
-  g.add(blade);
-  g.userData.blade = blade;
+  const { g, part } = glbWeapon('knife', skin, (m) => (std ? {} : { Blade: m.body }));
+  const M = armMaterials(skins);
+  g.userData.blade = part('blade');
 
   // Main qui serre le manche
   const handG = new THREE.Group();

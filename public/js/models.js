@@ -114,7 +114,7 @@ export function capsule(a, b, radius, material) {
  * indexCurl = pliage spécial de l'index (pour le poser sur la détente).
  */
 const handMats = new Map();
-function handMaterials(glove) {
+export function handMaterials(glove) {
   const key = glove.uuid;
   if (!handMats.has(key)) {
     const ud = glove.userData || {};
