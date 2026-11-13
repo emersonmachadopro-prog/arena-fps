@@ -22,6 +22,7 @@ export function createWorld(container) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap; // ombres douces
   renderer.toneMapping = THREE.ACESFilmicToneMapping; // rendu "cinéma", couleurs plus naturelles
   renderer.toneMappingExposure = 1.05;
+  renderer.localClippingEnabled = true; // découpe des jambes du joueur (body.js)
   renderer.autoClear = false; // on dessine 2 scènes : le monde puis l'arme
   container.appendChild(renderer.domElement);
 

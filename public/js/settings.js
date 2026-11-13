@@ -23,6 +23,8 @@ export const ACTIONS = [
   ['weapon1', 'Arme principale', 'Digit1'],
   ['weapon2', 'Arme secondaire (Glock)', 'Digit2'],
   ['weapon3', 'Couteau', 'Digit3'],
+  ['nextWeapon', 'Arme suivante', 'WheelDown'],
+  ['prevWeapon', 'Arme précédente', 'WheelUp'],
   ['loadout', 'Choisir son loadout (prochaine apparition)', 'KeyM'],
   ['scoreboard', 'Tableau des scores', 'Tab'],
 ];
@@ -82,6 +84,7 @@ function load() {
     if (!PRIMARIES.includes(l.primary)) l.primary = def[i].primary;
     l.optic = validOptic(l.primary, l.optic);
     if (!SECONDARIES.includes(l.secondary)) l.secondary = 'glock';
+    if (l.knife !== 'butterfly') l.knife = 'combat'; // couteau de combat ou papillon (cosmétique)
     l.name = String(l.name || def[i].name).slice(0, 24);
     return l;
   });

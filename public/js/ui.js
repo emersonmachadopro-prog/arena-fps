@@ -58,6 +58,47 @@ export function weaponSVG(id, skinId = 'default', optic = null) {
       ${[30, 40, 50, 60].map(x => `<rect x="${x}" y="30" width="3" height="12" fill="rgba(0,0,0,.25)"/>`).join('')}
       <circle cx="20" cy="36" r="4" fill="#3b4049"/></svg>`;
   }
+  if (id === 'butterfly') {
+    const H = skinId === 'default' || !skinId ? '#2b2f37' : A;
+    return `<svg viewBox="0 0 200 70">${defs}
+      <path d="M100 33 L160 31 Q176 33 186 36 Q170 39 160 40 L100 39 Z" fill="url(#${u}b)" ${glow}/>
+      <path d="M108 35 L156 34" stroke="rgba(255,255,255,.55)" stroke-width="1"/>
+      <rect x="14" y="26" width="86" height="7" rx="2.5" fill="${H}"/><rect x="14" y="39" width="86" height="7" rx="2.5" fill="${H}"/>
+      ${[24, 38, 52, 66, 80].map(x => `<rect x="${x}" y="28" width="8" height="3" rx="1" fill="rgba(0,0,0,.55)"/><rect x="${x}" y="41" width="8" height="3" rx="1" fill="rgba(0,0,0,.55)"/>`).join('')}
+      <circle cx="98" cy="29.5" r="2.4" fill="#c9a04a"/><circle cx="98" cy="42.5" r="2.4" fill="#c9a04a"/>
+      <rect x="8" y="27" width="6" height="5" rx="1" fill="#c9a04a"/></svg>`;
+  }
+  if (id === 'mp5') {
+    return `<svg viewBox="0 0 200 70">${defs}
+      <rect x="8" y="22" width="4" height="30" rx="1.5" fill="#1d2026"/>
+      <rect x="10" y="26" width="38" height="3" fill="${M}"/><rect x="10" y="38" width="38" height="3" fill="${M}"/>
+      <rect x="46" y="22" width="80" height="16" rx="3" fill="${M}" ${glow}/>
+      <rect x="48" y="19" width="76" height="4" rx="1.5" fill="${dark}"/>
+      ${[56, 76, 96, 112].map(x => `<rect x="${x}" y="30" width="3" height="3" rx="1" fill="rgba(0,0,0,.4)"/>`).join('')}
+      <rect x="124" y="24" width="40" height="14" rx="3" fill="${A}" ${glow}/>
+      ${[0, 1, 2].map(i => `<rect x="126" y="${27 + i * 3.5}" width="36" height="1.4" fill="rgba(0,0,0,.35)"/>`).join('')}
+      <rect x="120" y="16" width="52" height="5" rx="2" fill="${M}"/>
+      <rect x="164" y="27" width="22" height="6" rx="1.5" fill="${dark}"/><rect x="184" y="25" width="8" height="10" rx="2" fill="${dark}"/>
+      <circle cx="160" cy="12" r="4.5" fill="none" stroke="${dark}" stroke-width="2"/><rect x="157" y="14" width="6" height="5" fill="${dark}"/>
+      <path d="M100 38 L114 38 Q112 52 110 62 L100 62 Q104 50 100 38 Z" fill="#1d2026"/>
+      <path d="M68 38 L84 38 L88 58 Q82 62 76 60 Z" fill="${A}"/>
+      <path d="M84 38 Q88 46 96 46 L96 38" fill="none" stroke="${dark}" stroke-width="2"/>
+      <rect x="150" y="18" width="10" height="4" fill="#1d2026"/>${opticSVG(optic, 70, 19)}</svg>`;
+  }
+  if (id === 'shotgun') {
+    return `<svg viewBox="0 0 200 70">${defs}
+      <path d="M4 30 Q20 28 46 27 L52 33 L50 40 Q30 46 8 50 Q2 46 4 30 Z" fill="${A}" ${glow}/>
+      <path d="M12 33 Q30 31 44 30" stroke="rgba(255,255,255,.2)" stroke-width="1.5" fill="none"/>
+      <rect x="50" y="24" width="40" height="16" rx="3" fill="${M}"/>
+      <rect x="62" y="28" width="16" height="5" rx="1" fill="rgba(0,0,0,.5)"/>
+      <rect x="88" y="26" width="108" height="5" rx="2" fill="${M}"/>
+      <rect x="90" y="32" width="88" height="5" rx="2" fill="${dark}"/>
+      <rect x="112" y="30" width="40" height="11" rx="4" fill="${A}" ${glow}/>
+      ${[0, 1, 2, 3, 4, 5].map(i => `<rect x="${116 + i * 6}" y="31" width="2" height="9" fill="rgba(0,0,0,.3)"/>`).join('')}
+      <circle cx="193" cy="25" r="1.6" fill="#ece6d6"/>
+      <path d="M58 40 Q62 50 72 48 L72 40" fill="none" stroke="${dark}" stroke-width="2"/>
+      <rect x="64" y="40" width="2.5" height="6" fill="${dark}"/>${opticSVG(optic, 64, 24)}</svg>`;
+  }
   if (id === 'glock') {
     const F = skinId === 'default' || !skinId ? '#25282f' : A; // carcasse en polymère noir par défaut
     return `<svg viewBox="0 0 200 70">${defs}
@@ -171,6 +212,8 @@ let category = 'primary';      // emplacement ouvert
 const WEAPON_INFO = {
   ak: { desc: 'Fusil d\'assaut automatique. Polyvalent, efficace à moyenne distance.', stats: { Dégâts: 35, Cadence: 90, Précision: 60, Portée: 65, Mobilité: 75 } },
   kar98k: { desc: 'Fusil à verrou. Un tir à la tête = un kill. Mire de base, lunette en option.', stats: { Dégâts: 95, Cadence: 15, Précision: 98, Portée: 100, Mobilité: 50 } },
+  mp5: { desc: 'Mitraillette rapide et maniable. Précise même sans viser, idéale en courte et moyenne distance.', stats: { Dégâts: 28, Cadence: 98, Précision: 70, Portée: 45, Mobilité: 90 } },
+  shotgun: { desc: 'Fusil à pompe. Dévastateur de près (un tir bien placé = un kill), inutile de loin. Pompe après chaque tir.', stats: { Dégâts: 100, Cadence: 20, Précision: 40, Portée: 15, Mobilité: 70 } },
   glock: { desc: 'Pistolet semi-automatique de 17 coups. Sortie rapide, parfait en dépannage.', stats: { Dégâts: 22, Cadence: 70, Précision: 55, Portée: 35, Mobilité: 95 } },
   knife: { desc: 'Toujours avec toi. Rapide, silencieux, mortel au corps à corps.', stats: { Dégâts: 55, Cadence: 60, Précision: 100, Portée: 5, Mobilité: 100 } },
 };
@@ -217,8 +260,8 @@ export function initInventory(onChange) {
       const card = document.createElement('button');
       card.className = 'cat-card' + (c.id === category ? ' selected' : '');
       card.innerHTML = `<div class="cat-label"><span>${c.label}</span><kbd>${c.key}</kbd></div>
-        <div class="cat-art">${weaponSVG(wid, settings.skins[wid], optic)}</div>
-        <div class="cat-name">${WEAPONS[wid].name}</div>
+        <div class="cat-art">${weaponSVG(wid === 'knife' && l.knife === 'butterfly' ? 'butterfly' : wid, settings.skins[wid], optic)}</div>
+        <div class="cat-name">${wid === 'knife' && l.knife === 'butterfly' ? 'Papillon' : WEAPONS[wid].name}</div>
         <div class="cat-sub">${optic ? OPTICS[optic].name + ' · ' : ''}Skin ${skin.name}</div>
         <div class="cat-bars">${['Dégâts', 'Cadence', 'Mobilité'].map(k => `<div><span>${k}</span><i><b style="width:${st[k]}%"></b></i></div>`).join('')}</div>
         <div class="cat-actions"><span>${c.id === 'knife' ? 'SKINS' : 'MODIFIER'}</span><span>${c.id === 'primary' ? 'ARMURERIE' : 'SKINS'}</span></div>`;
@@ -248,7 +291,15 @@ export function initInventory(onChange) {
       renderWeaponCards($('lo-weapons'), SECONDARIES, l.secondary || 'glock', (id) => { l.secondary = id; saveSettings(); changed(); });
       weaponSkinGrid($('lo-skins'), l.secondary || 'glock', changed);
     } else {
-      d.innerHTML = `<h3>Couteau</h3><p class="hint">${WEAPON_INFO.knife.desc}</p><h3>Skin</h3><div class="skin-grid" id="lo-skins"></div>`;
+      d.innerHTML = `<h3>Couteau</h3><div class="weapon-cards" id="lo-knives"></div><h3>Skin</h3><div class="skin-grid" id="lo-skins"></div>`;
+      const box = $('lo-knives');
+      for (const [id, name, desc] of [['combat', 'Couteau de combat', 'Le classique : solide et sobre.'], ['butterfly', 'Couteau papillon', 'Balisong : sortie en rotation, et des figures autour de l\'annulaire à l\'inspection (Y).']]) {
+        const b = document.createElement('button');
+        b.className = 'wcard' + ((l.knife || 'combat') === id ? ' selected' : '');
+        b.innerHTML = `<div class="wname">${name}${(l.knife || 'combat') === id ? '<small>Choisi</small>' : ''}</div>${weaponSVG(id === 'butterfly' ? 'butterfly' : 'knife', settings.skins.knife)}<div class="wdesc">${desc}</div>`;
+        b.onclick = () => { l.knife = id; saveSettings(); sfx.click(); changed(); };
+        box.appendChild(b);
+      }
       weaponSkinGrid($('lo-skins'), 'knife', changed);
     }
   }
@@ -291,10 +342,11 @@ export function renderLoadoutCards(container, selected, onPick) {
 export function renderMainSide() {
   const l = activeLoadout();
   const sec = l.secondary || 'glock';
+  void 0;
   $('equipped-card').innerHTML = `<div class="card-title">🎒 Loadout équipé</div>
     <div class="equipped"><div class="lname">${escapeHtml(l.name)}</div>
     ${weaponSVG(l.primary, settings.skins[l.primary], l.optic)}
-    <div class="eq-mini">${weaponSVG(sec, settings.skins[sec])}${weaponSVG('knife', settings.skins.knife)}</div>
+    <div class="eq-mini">${weaponSVG(sec, settings.skins[sec])}${weaponSVG(l.knife === 'butterfly' ? 'butterfly' : 'knife', settings.skins.knife)}</div>
     <div><span class="tag">${WEAPONS[l.primary].name}</span><span class="tag">${OPTICS[l.optic].name}</span><span class="tag">${WEAPONS[sec].name}</span><span class="tag">Couteau</span></div>
     <div class="hint">Change-le dans l'Inventaire, ou avec ${escapeHtml(keyLabel(settings.keys.loadout))} en jeu.</div>
     <button class="small" id="btn-goto-inventory">Ouvrir l'inventaire</button></div>`;
@@ -377,7 +429,8 @@ export function initSettingsMenu() {
 
   // Capture de la nouvelle touche : clavier, boutons de souris ou molette
   const assign = (code) => {
-    if (code !== 'Escape') {
+    if (code === 'Delete' || code === 'Backspace') { settings.keys[listeningFor] = ''; saveSettings(); sfx.click(); }
+    else if (code !== 'Escape') {
       // Si la touche est déjà utilisée, on échange les deux actions
       const other = Object.keys(settings.keys).find(k => settings.keys[k] === code);
       if (other && other !== listeningFor) settings.keys[other] = settings.keys[listeningFor];
@@ -417,7 +470,12 @@ export function initSettingsMenu() {
       if (/^Mouse|^Wheel/.test(settings.keys[id])) btn.classList.add('mouse');
       if (listeningFor === id) btn.classList.add('listening');
       btn.addEventListener('click', (e) => { if (listeningFor) return; e.stopPropagation(); setTimeout(() => { listeningFor = id; refresh(); }, 0); });
-      row.append(span, btn);
+      // ✕ : retirer la touche (l'action n'a plus de touche)
+      const clr = document.createElement('button');
+      clr.className = 'ghost small unbind'; clr.textContent = '✕'; clr.title = 'Retirer la touche';
+      clr.disabled = !settings.keys[id];
+      clr.onclick = (e) => { e.stopPropagation(); settings.keys[id] = ''; saveSettings(); sfx.click(); refresh(); };
+      row.append(span, btn, clr);
       box.appendChild(row);
     }
   }

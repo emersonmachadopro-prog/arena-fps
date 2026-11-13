@@ -26,7 +26,7 @@ export class BotBrain {
     this.grounded = true;
   }
 
-  /** Appelé 20 fois par seconde par Room.tick() */
+  /** Appelé 30 fois par seconde par Room.tick() */
   update(room, p, dt) {
     const cfg = this.cfg;
     if (!p.vel) p.vel = { x: 0, y: 0, z: 0 };

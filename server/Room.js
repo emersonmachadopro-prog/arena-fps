@@ -4,7 +4,7 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted, pelletDirs, pelletDamage } from '../shared/constants.js';
 import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
@@ -338,6 +338,7 @@ export class Room {
     p.yaw = data.yaw;
     p.pitch = Math.max(-1.55, Math.min(1.55, data.pitch));
     p.crouch = !!data.crouch;
+    p.ads = !!data.ads; p.insp = !!data.insp; p.spr = !!data.spr; // pour l'animation vue en spectateur
     p.lastMove = now;
   }
 
@@ -385,7 +386,7 @@ export class Room {
     for (const p of this.players.values()) {
       if (!p.hist) p.hist = [];
       p.hist.push({ t: now, x: p.x, y: p.y, z: p.z, crouch: p.crouch });
-      while (p.hist.length > 25) p.hist.shift();
+      while (p.hist.length > 40) p.hist.shift(); // ~1,3 s d'historique
     }
   }
 
@@ -446,6 +447,30 @@ export class Room {
     const enemies = [...this.players.values()]
       .filter(o => o.alive && o.team && o.team !== p.team)
       .map(o => ({ id: o.id, ...this.positionAt(o, t) }));
+    // Fusil à pompe : plusieurs plombs (motif fixe), dégâts additionnés par cible
+    if (w.pellets) {
+      const dirs = pelletDirs(dir, w.pelletSpread, w.pellets);
+      const per = new Map();
+      let first = null;
+      for (const d of dirs) {
+        const r = traceShot(eye, d, enemies, MAP_BOXES, w.range, 0.1);
+        if (!first) first = r;
+        if (r.hit) {
+          const e = per.get(r.hit.id) || { dmg: 0, head: false, dist: r.hit.dist, d };
+          e.dmg += pelletDamage(w, r.hit.dist, r.hit.headshot);
+          e.head ||= r.hit.headshot;
+          per.set(r.hit.id, e);
+        }
+      }
+      const endDist = first.hit ? first.hit.dist : Math.min(first.wallDist, w.range);
+      const point = { x: eye.x + dir.x * endDist, y: eye.y + dir.y * endDist, z: eye.z + dir.z * endDist };
+      this.io.to(this.code).emit('shot', { id: p.id, weapon: weaponId, from: eye, dir, dist: endDist, point, hitPlayer: per.size > 0, hitWall: !first.hit && first.wallDist < w.range });
+      for (const [id, e] of per) {
+        const pt = { x: eye.x + e.d.x * e.dist, y: eye.y + e.d.y * e.dist, z: eye.z + e.d.z * e.dist };
+        this.damage(p, this.players.get(id), Math.round(e.dmg), e.head, weaponId, pt);
+      }
+      return;
+    }
     const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, 0.1);
 
     // Tout le monde voit le tir (traçante, son, sang si touché)
@@ -514,7 +539,7 @@ export class Room {
         id: p.id, name: p.name, team: p.team,
         x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3),
         yaw: +p.yaw.toFixed(3), pitch: +p.pitch.toFixed(3),
-        crouch: p.crouch, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
+        crouch: p.crouch, ads: !!p.ads, insp: !!p.insp, spr: !!p.spr, alive: p.alive, hp: p.hp, weapon: p.weapon, primary: p.primary, optic: p.optic, isBot: !!p.isBot,
         mag: p.mag, reserve: p.reserve, reloading: !!p.reloadEnd, secondary: p.secondary, ping: p.isBot ? -1 : p.ping,
         kills: p.kills, deaths: p.deaths,
       })),

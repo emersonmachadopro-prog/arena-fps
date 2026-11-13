@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { sfx } from './audio.js';
 
 // Tailles des douilles [rayon, longueur]
-const SHELLS = { ak: [0.0058, 0.039], kar98k: [0.0062, 0.057], glock: [0.0052, 0.019] };
+const SHELLS = { ak: [0.0058, 0.039], mp5: [0.0052, 0.019], kar98k: [0.0062, 0.057], glock: [0.0052, 0.019], shotgun: [0.0105, 0.058] };
 
 export class Effects {
   constructor(scene) {
@@ -14,6 +14,7 @@ export class Effects {
     this.tracerMat = new THREE.LineBasicMaterial({ color: 0xfff1a8, transparent: true, opacity: 0.9 });
     this.sparkGeo = new THREE.BoxGeometry(0.05, 0.05, 0.05);
     this.brass = new THREE.MeshStandardMaterial({ color: 0xc9a54a, metalness: 0.85, roughness: 0.3 });
+    this.hull = new THREE.MeshStandardMaterial({ color: 0xb3261e, roughness: 0.55 }); // douille de cartouche rouge
     this.shellGeos = {};
     this.shells = [];
   }
@@ -25,7 +26,7 @@ export class Effects {
   shell(type, pos, vel, floorY = 0) {
     const [r, len] = SHELLS[type] || SHELLS.ak;
     if (!this.shellGeos[type]) this.shellGeos[type] = new THREE.CylinderGeometry(r, r * 1.04, len, 8);
-    const m = new THREE.Mesh(this.shellGeos[type], this.brass);
+    const m = new THREE.Mesh(this.shellGeos[type], type === 'shotgun' ? this.hull : this.brass);
     m.position.set(pos.x, pos.y, pos.z);
     m.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3);
     m.castShadow = true;

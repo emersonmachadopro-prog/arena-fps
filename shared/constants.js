@@ -75,6 +75,51 @@ export const WEAPONS = {
     recoilKick: 0.06,
     adsSpeed: 13,          // mise en joue rapide
   },
+  mp5: {
+    name: 'MP5',
+    slot: 'primary',
+    damage: 21,
+    headDamage: 62,
+    fireInterval: 0.075,   // 800 coups/min
+    auto: true,
+    magSize: 30,
+    reserve: 120,
+    reloadTime: 1.9,
+    reloadEmptyTime: 2.4,
+    range: 120,
+    hipSpread: 0.03,       // précis même sans viser (mitraillette)
+    adsSpread: 0.003,
+    moveSpread: 0.02,
+    airSpread: 0.07,
+    burstSpread: 0.0028,
+    recoilKick: 0.0075,
+    adsSpeed: 16,
+    moveSpeed: 1.05,       // un peu plus rapide en courant
+  },
+  shotgun: {
+    name: 'M870',
+    slot: 'primary',
+    pellets: 9,            // plombs par tir
+    pelletSpread: 0.055,   // ouverture de la gerbe
+    damage: 13,            // par plomb (au corps)
+    headDamage: 24,        // par plomb (à la tête)
+    falloff: [7, 26, 0.3], // pleine puissance jusqu'à 7 m, 30 % à 26 m
+    fireInterval: 0.9,     // pompe entre deux tirs
+    auto: false,
+    magSize: 6,
+    reserve: 24,
+    reloadOpen: 0.3,       // cartouche par cartouche
+    reloadPerRound: 0.5,
+    reloadClose: 0.35,
+    range: 45,
+    hipSpread: 0.012,
+    adsSpread: 0.004,
+    moveSpread: 0.01,
+    airSpread: 0.03,
+    burstSpread: 0,
+    recoilKick: 0.05,
+    adsSpeed: 12,
+  },
   glock: {
     name: 'Glock 18',
     slot: 'secondary',
@@ -106,7 +151,7 @@ export const WEAPONS = {
 };
 
 // Armes qu'on peut choisir dans les loadouts
-export const PRIMARIES = ['ak', 'kar98k'];
+export const PRIMARIES = ['ak', 'mp5', 'shotgun', 'kar98k'];
 export const SECONDARIES = ['glock'];
 export const GUNS = [...PRIMARIES, ...SECONDARIES];
 
@@ -125,7 +170,38 @@ export const WEAPON_OPTICS = {
   ak: ['iron', 'reddot', 'mid'],
   kar98k: ['iron', 'reddot', 'mid', 'scope'],
   glock: ['iron'],
+  mp5: ['iron', 'reddot', 'mid'],
+  shotgun: ['iron', 'reddot'],
 };
+
+/**
+ * Directions des plombs d'un fusil à pompe : un motif FIXE (le même chez le client
+ * et le serveur) autour de la direction visée. Plus juste qu'un tirage au hasard.
+ */
+export function pelletDirs(dir, spread, count = 9) {
+  const up = Math.abs(dir.y) > 0.99 ? { x: 1, y: 0, z: 0 } : { x: 0, y: 1, z: 0 };
+  // deux axes perpendiculaires à la visée
+  let rx = dir.y * up.z - dir.z * up.y, ry = dir.z * up.x - dir.x * up.z, rz = dir.x * up.y - dir.y * up.x;
+  const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+  const ux = ry * dir.z - rz * dir.y, uy = rz * dir.x - rx * dir.z, uz = rx * dir.y - ry * dir.x;
+  const out = [];
+  for (let i = 0; i < count; i++) {
+    // 1 au centre, puis deux anneaux
+    const ring = i === 0 ? 0 : i <= 4 ? 0.5 : 1;
+    const a = i * 2.39996 + (i > 4 ? 0.4 : 0);
+    const ox = Math.cos(a) * ring * spread, oy = Math.sin(a) * ring * spread;
+    const x = dir.x + rx * ox + ux * oy, y = dir.y + ry * ox + uy * oy, z = dir.z + rz * ox + uz * oy;
+    const l = Math.hypot(x, y, z);
+    out.push({ x: x / l, y: y / l, z: z / l });
+  }
+  return out;
+}
+/** Dégâts d'un plomb selon la distance */
+export function pelletDamage(w, dist, head) {
+  const [near, far, min] = w.falloff;
+  const k = dist <= near ? 1 : dist >= far ? min : 1 - (1 - min) * (dist - near) / (far - near);
+  return (head ? w.headDamage : w.damage) * k;
+}
 export function validOptic(weapon, optic) {
   return WEAPON_OPTICS[weapon]?.includes(optic) ? optic : WEAPON_OPTICS[weapon]?.[0] || 'iron';
 }
@@ -142,7 +218,7 @@ export const MATCH = {
   FREEZE_TIME: 3,        // secondes d'attente au début de chaque manche
   ROUND_TIME: 90,        // durée max d'une manche
   ROUND_END_TIME: 4,     // pause après une manche
-  TICK_RATE: 20,         // mises à jour réseau par seconde
+  TICK_RATE: 30,         // mises à jour réseau par seconde
 };
 
 export const TEAMS = {

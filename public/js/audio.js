@@ -35,10 +35,22 @@ const MIX = {
   hitmarker: 0.35, headshot: 0.4, kill: 0.4, ui_click: 0.25,
 };
 
+// Fichiers déjà téléchargés pendant l'écran de chargement (décodés au premier clic)
+const raw = {};
+/** Télécharge tous les sons (sans les décoder) : appelé par l'écran de chargement */
+export function preloadSounds(onProgress) {
+  let done = 0;
+  const all = [...SAMPLE_NAMES, 'lobby_music'];
+  return Promise.all(all.map(name => fetch(`/sounds/${name}.mp3`)
+    .then(r => (r.ok ? r.arrayBuffer() : null))
+    .then(ab => { if (ab && name !== 'lobby_music') raw[name] = ab; })
+    .catch(() => {})
+    .finally(() => onProgress?.(++done / all.length))));
+}
+
 function loadSamples() {
   for (const name of SAMPLE_NAMES) {
-    fetch(`/sounds/${name}.mp3`)
-      .then(r => (r.ok ? r.arrayBuffer() : null))
+    (raw[name] ? Promise.resolve(raw[name]) : fetch(`/sounds/${name}.mp3`).then(r => (r.ok ? r.arrayBuffer() : null)))
       .then(ab => ab && ctx.decodeAudioData(ab))
       .then(buf => { if (buf) buffers[name] = buf; })
       .catch(() => {});
@@ -50,12 +62,12 @@ function loadSamples() {
  * pos = position 3D (null = son "dans la tête" : nos propres actions, l'interface)
  * ref = distance jusqu'à laquelle le son garde tout son volume
  */
-function sample(name, pos = null, { vol = 1, reverb = 0.1, far = 60, ref = 2.5, pitch = 0.05 } = {}) {
+function sample(name, pos = null, { vol = 1, reverb = 0.1, far = 60, ref = 2.5, pitch = 0.05, rate = 1 } = {}) {
   const buf = buffers[name];
   if (!ctx || !buf) return false;
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.playbackRate.value = 1 + (Math.random() * 2 - 1) * pitch; // légère variation : moins répétitif
+  src.playbackRate.value = rate * (1 + (Math.random() * 2 - 1) * pitch); // légère variation : moins répétitif
   src.connect(output(pos, vol * (MIX[name] ?? 1), reverb, far, ref));
   src.start();
   return true;
@@ -211,8 +223,30 @@ function bell(dest, t, freq, vol, dur = 0.5) {
   tone(dest, { t, dur: dur * 0.3, freq: freq * 3.02, vol: vol * 0.15, type: 'triangle' });
 }
 const KILL_PACKS = {
-  // "Classique" : un son cristallin qui monte d'une marche à chaque kill
+  // "Arena" (par défaut) : clic sec + coup sourd + double tintement qui monte à chaque kill.
+  // 5e kill : arpège qui s'envole + souffle + grosse basse.
   classic(n) {
+    const out = output(null, 0.6, 0.18);
+    // 1) l'impact : petit clic aigu + coup grave (le côté "satisfaisant")
+    noise(out, { dur: 0.025, type: 'highpass', freq: 2500, vol: 0.5 });
+    tone(out, { dur: 0.13, freq: 160, end: 48, vol: 0.85 });
+    tone(out, { dur: 0.05, freq: 900, end: 300, vol: 0.18, type: 'triangle' });
+    // 2) le tintement : note qui monte (do, mi, sol, si), répété une octave au-dessus
+    const notes = [523.3, 659.3, 784, 987.8];
+    if (n <= 4) {
+      const f = notes[n - 1];
+      bell(out, 0.012, f, 0.36, 0.42);
+      bell(out, 0.085, f * 2, 0.16, 0.3);
+      tone(out, { t: 0.012, dur: 0.35, freq: f * 1.5, vol: 0.06, type: 'sine' }); // quinte douce
+    } else {
+      [523.3, 659.3, 784, 1046.5, 1318.5].forEach((f, i) => bell(out, 0.02 + i * 0.05, f, 0.26, 0.5));
+      bell(out, 0.3, 2093, 0.2, 0.9);
+      noise(out, { t: 0.02, dur: 0.45, type: 'bandpass', freq: 900, q: 1.2, vol: 0.22, attack: 0.08, sweep: 7000 });
+      tone(out, { t: 0.0, dur: 0.5, freq: 90, end: 38, vol: 0.9 });
+    }
+  },
+  // "Cloches" : l'ancien son cristallin
+  bells(n) {
     const out = output(null, 0.5, 0.25);
     const notes = [349.2, 440, 523.3, 659.3]; // fa, la, do, mi
     if (n <= 4) {
@@ -247,7 +281,7 @@ const KILL_PACKS = {
     if (n === 5) bell(out, 0.12, 1568, 0.18, 0.7);
   },
 };
-export const KILL_SOUND_PACKS = { classic: 'Classique', neon: 'Néon', impact: 'Impact' };
+export const KILL_SOUND_PACKS = { classic: 'Arena', bells: 'Cloches', neon: 'Néon', impact: 'Impact' };
 
 // Distance d'un son jusqu'à l'auditeur (pour assourdir les tirs lointains)
 function distTo(pos) {
@@ -282,6 +316,26 @@ export const sfx = {
     noise(out, { dur: 0.2, type: 'bandpass', freq: 450, q: 1, vol: 0.9 });
     tone(out, { dur: 0.35, freq: 110, end: 30, vol: 1.0 });
   },
+  /** Tir de MP5 : plus sec et plus aigu que l'AK */
+  smg(pos = null) {
+    if (!ctx) return;
+    const d = distTo(pos);
+    if (sample(pos && d > 25 ? 'ak_shot_far' : 'ak_shot', pos, { vol: pos ? 0.95 : 0.72, ref: 9, far: 140, reverb: 0.1, rate: 1.28 })) return;
+    this.shot(pos);
+  },
+  /** Tir de fusil à pompe : grosse détonation grave */
+  shotgun(pos = null) {
+    if (!ctx) return;
+    const d = distTo(pos);
+    const a = sample(pos && d > 30 ? 'kar_shot_far' : 'kar_shot', pos, { vol: pos ? 1.25 : 1, ref: 12, far: 180, reverb: 0.18, rate: 0.8 });
+    sample('ak_shot', pos, { vol: pos ? 0.7 : 0.55, ref: 8, far: 80, reverb: 0.05, rate: 0.62 });
+    if (!a) this.sniper(pos);
+  },
+  /** Pompe : en arrière puis en avant */
+  pumpBack(pos) { if (!ctx || sample('charge_back', pos, { far: 25, ref: 2, rate: 0.85, vol: 1.2 })) return; this.chargeBack(pos); },
+  pumpForward(pos) { if (!ctx || sample('charge_release', pos, { far: 25, ref: 2, rate: 0.85, vol: 1.2 })) return; this.chargeRelease(pos); },
+  shellIn(pos) { if (!ctx || sample('round_in', pos, { far: 20, ref: 2, rate: 0.78, vol: 1.1 })) return; this.roundIn(pos); },
+
   /** Tir de Glock 18 */
   pistol(pos = null) {
     if (!ctx) return;
@@ -353,6 +407,7 @@ export const sfx = {
     if (!ctx) return;
     if (weapon === 'kar98k') { this.boltUp(pos); setTimeout(() => this.boltBack(pos), 200); setTimeout(() => this.roundIn(pos), 700); }
     else if (weapon === 'glock') { this.pistolMagOut(pos); setTimeout(() => this.pistolMagIn(pos), 700); }
+    else if (weapon === 'shotgun') { this.shellIn(pos); setTimeout(() => this.shellIn(pos), 500); }
     else { this.magOut(pos); setTimeout(() => this.magIn(pos), 900); }
   },
 

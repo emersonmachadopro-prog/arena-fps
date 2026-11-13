@@ -113,9 +113,14 @@ export class LocalPlayer {
       this.vel.z += (wishZ * maxSpeed - this.vel.z) * t;
 
       // --- Saut ---
-      if (canMove && this.grounded && input.is('jump') && !this.crouch) {
+      // Petite tolérance : on peut encore sauter 0,1 s après avoir quitté un rebord (coyote time),
+      // et un appui juste avant d'atterrir est gardé 0,12 s (saut "tampon").
+      if (input.was('jump')) this.jumpBuffer = 0.12;
+      const canJump = this.grounded || (this.airTime < 0.1 && this.vel.y <= 0);
+      if (canMove && canJump && (input.is('jump') || this.jumpBuffer > 0) && !this.crouch) {
         this.vel.y = PLAYER.JUMP_SPEED;
         this.grounded = false;
+        this.jumpBuffer = 0; this.airTime = 1;
       }
     }
 
@@ -125,6 +130,8 @@ export class LocalPlayer {
     const fallSpeed = -this.vel.y;
     const wasGrounded = this.grounded;
     this.grounded = moveAndCollide(this.pos, this.vel, dt, height, MAP_BOXES, this.grounded);
+    this.airTime = this.grounded ? 0 : (this.airTime || 0) + dt;
+    this.jumpBuffer = Math.max(0, (this.jumpBuffer || 0) - dt);
     // Atterrissage : on note la force de l'impact (pour l'animation de l'arme et le son)
     this.landed = !wasGrounded && this.grounded && fallSpeed > 3 ? Math.min(1, fallSpeed / 12) : 0;
     // Pas : un bruit tous les ~2,3 m (pas de bruit accroupi ou en glissade)

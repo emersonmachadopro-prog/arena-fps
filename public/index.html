@@ -16,6 +16,19 @@
 <body>
   <!-- Le canvas 3D est ajouté ici par le JS -->
   <div id="game"></div>
+
+  <!-- ===================== Écran de chargement ===================== -->
+  <div id="loading">
+    <div class="ld-bg"></div>
+    <div class="ld-center">
+      <div class="ld-emblem"><i></i><i></i><i></i><b>⌖</b></div>
+      <div class="logo ld-logo">ARENA<span>STRIKE</span></div>
+      <div class="ld-bar"><i id="ld-fill"></i></div>
+      <div class="ld-status" id="ld-status">Chargement des armes…</div>
+      <button id="ld-enter" class="ld-enter hidden">CLIQUE POUR ENTRER</button>
+    </div>
+    <div class="ld-tip"><b>ASTUCE</b><span id="ld-tip"></span></div>
+  </div>
   <div id="menu-backdrop"></div>
 
   <!-- ===================== HUD (affiché en jeu) ===================== -->
@@ -26,6 +39,9 @@
     <canvas id="crosshair" width="160" height="160"></canvas>
     <div id="hitmarker"></div>
     <div id="damage-vignette"></div>
+    <div id="lowhp"></div>
+    <div id="elim-text">VOUS AVEZ ÉLIMINÉ <b></b></div>
+    <div id="kill-banner"><div class="kb-icon">✕</div><div class="kb-name"></div><div class="kb-sub"></div></div>
     <div id="damage-arrow"></div>
 
     <div id="topbar">
@@ -205,7 +221,7 @@
         <div class="settings-grid">
           <div>
             <h3>Touches</h3>
-            <p class="hint">Clique sur une action puis appuie sur une touche <b>ou un bouton de la souris</b> (clic molette, boutons latéraux, molette). Échap pour annuler.</p>
+            <p class="hint">Clique sur une action puis appuie sur une touche <b>ou un bouton de la souris</b> (clic molette, boutons latéraux, molette). Échap pour annuler, ✕ ou Suppr pour retirer une touche. Ex. : mets la molette sur « Sauter ».</p>
             <div id="keybinds"></div>
           </div>
           <div>

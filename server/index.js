@@ -19,7 +19,10 @@ const PORT = process.env.PORT || 3000; // les hébergeurs fournissent souvent le
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  perMessageDeflate: false,   // pas de compression : les paquets sont petits, ça évite de la latence
+  pingInterval: 10000, pingTimeout: 8000,
+});
 
 // ---- Fichiers statiques ----
 app.use(express.static(path.join(ROOT, 'public')));

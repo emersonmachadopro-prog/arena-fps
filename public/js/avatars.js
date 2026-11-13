@@ -17,7 +17,8 @@ const HIP = 0.92;      // hauteur des hanches (pivot des jambes)
 const KNEE = 0.44;     // longueur de la cuisse
 const SHOULDER = 1.4;  // hauteur des épaules (pivot des bras + arme)
 const NECK = 1.5;      // pivot de la tête
-const INTERP_DELAY = 100; // ms de retard volontaire pour l'interpolation réseau
+// Retard volontaire pour l'interpolation réseau (ms). Ajusté en direct par net.js selon la qualité de la connexion.
+export const INTERP = { delay: 70 };
 
 const ease = (t) => t * t * (3 - 2 * t);
 const angleLerp = (a, b, k) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k;
@@ -217,7 +218,7 @@ export class Avatar {
   sampleSnapshots(serverNow) {
     const sn = this.snaps;
     if (!sn.length) return null;
-    const rt = serverNow - INTERP_DELAY;
+    const rt = serverNow - INTERP.delay;
     if (rt <= sn[0].t) return sn[0];
     for (let i = sn.length - 1; i > 0; i--) {
       const a = sn[i - 1], b = sn[i];
@@ -397,6 +398,27 @@ function buildThirdPersonWeapon(id, skin, optic) {
   if (id === 'knife') {
     g.add(rbox(0.03, 0.04, 0.12, accent, 0.02, -0.08, -0.36, 0.01), rbox(0.01, 0.05, 0.22, mat(0xd8dee9, { metalness: 0.8 }), 0.02, -0.07, -0.52, 0.004));
     muzzle.position.set(0.02, -0.07, -0.6);
+  } else if (id === 'mp5') {
+    const mag = rbox(0.03, 0.15, 0.05, dark, 0, -0.1, -0.42, 0.01); mag.rotation.x = 0.1;
+    const grip = rbox(0.035, 0.1, 0.05, accent, 0, -0.09, -0.27, 0.01); grip.rotation.x = -0.3;
+    g.add(
+      rbox(0.05, 0.065, 0.36, body, 0, -0.02, -0.4, 0.012),
+      rbox(0.058, 0.055, 0.15, accent, 0, -0.03, -0.62, 0.014),
+      cyl(0.012, 0.12, body, 0, -0.01, -0.74),
+      rbox(0.06, 0.09, 0.03, dark, 0, -0.04, -0.2, 0.008),
+      mag, grip,
+    );
+    muzzle.position.set(0, -0.01, -0.8);
+  } else if (id === 'shotgun') {
+    const stock = rbox(0.045, 0.1, 0.25, accent, 0, -0.07, -0.17, 0.014); stock.rotation.x = 0.18;
+    g.add(
+      rbox(0.052, 0.075, 0.22, body, 0, -0.02, -0.42, 0.012),
+      cyl(0.014, 0.52, body, 0, 0.0, -0.78),
+      cyl(0.012, 0.42, dark, 0, -0.035, -0.74),
+      rbox(0.055, 0.05, 0.17, accent, 0, -0.04, -0.68, 0.015),
+      stock,
+    );
+    muzzle.position.set(0, 0.0, -1.04);
   } else if (id === 'kar98k') {
     g.add(
       rbox(0.06, 0.08, 0.95, accent, 0, -0.02, -0.4, 0.02),

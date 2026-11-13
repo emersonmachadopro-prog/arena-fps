@@ -53,8 +53,6 @@ export class Input {
       if (!this.locked) return;
       const code = e.deltaY < 0 ? 'WheelUp' : 'WheelDown';
       this.pressed.add(code);
-      // Si la molette n'est attribuée à aucune action, elle sert à changer d'arme
-      if (!Object.values(settings.keys).includes(code)) this.wheel += Math.sign(e.deltaY);
     }, { passive: true });
 
     document.addEventListener('pointerlockchange', () => {
@@ -85,7 +83,11 @@ export class Input {
         .catch(() => {});
     }
     // Le navigateur peut refuser si on re-capture trop vite après Échap
-    try { const p = this.canvas.requestPointerLock(); p?.catch?.(() => {}); } catch { /* ignore */ }
+    // Mouvement de souris "brut" (sans l'accélération de Windows) quand le navigateur le permet
+    try {
+      const p = this.canvas.requestPointerLock({ unadjustedMovement: true });
+      p?.catch?.(() => { try { this.canvas.requestPointerLock()?.catch?.(() => {}); } catch { /* ignore */ } });
+    } catch { try { this.canvas.requestPointerLock(); } catch { /* ignore */ } }
   }
   unlock() { if (this.locked) document.exitPointerLock(); }
 
@@ -95,7 +97,12 @@ export class Input {
   }
 
   /** L'action (ex: 'forward') est-elle maintenue ? */
-  is(action) { return this.down.has(settings.keys[action]); }
+  is(action) {
+    const k = settings.keys[action];
+    if (!k) return false; // action sans touche (retirée dans les paramètres)
+    // La molette n'est jamais "maintenue" : un cran compte comme un appui (ex. sauter à la molette)
+    return this.down.has(k) || (k.startsWith('Wheel') && this.pressed.has(k));
+  }
   /** L'action vient-elle d'être appuyée ? */
   was(action) {
     if (this.pressed.has(settings.keys[action])) return true;

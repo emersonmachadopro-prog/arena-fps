@@ -24,13 +24,13 @@ export const CHARACTER_SKINS = {
   royal:   { name: 'Royal', suit: 0x3b2c70, vest: 0x1e1642 },
 };
 
-export const DEFAULT_SKINS = { character: 'default', ak: 'default', kar98k: 'default', glock: 'default', knife: 'default' };
+export const DEFAULT_SKINS = { character: 'default', ak: 'default', mp5: 'default', shotgun: 'default', kar98k: 'default', glock: 'default', knife: 'default' };
 
 /** Nettoie des skins reçus (le serveur n'accepte que des skins existants) */
 export function sanitizeSkins(s) {
   const out = { ...DEFAULT_SKINS };
   if (!s || typeof s !== 'object') return out;
   if (CHARACTER_SKINS[s.character]) out.character = s.character;
-  for (const w of ['ak', 'kar98k', 'glock', 'knife']) if (WEAPON_SKINS[s[w]]) out[w] = s[w];
+  for (const w of ['ak', 'mp5', 'shotgun', 'kar98k', 'glock', 'knife']) if (WEAPON_SKINS[s[w]]) out[w] = s[w];
   return out;
 }

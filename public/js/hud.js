@@ -20,6 +20,7 @@ export class HUD {
   /** Mise à jour à chaque image */
   update({ hp, weapon, primary, secondary = 'glock', ads = 0, optic = null, overlay = null, mag, reserve, reloading, spread, score, timeLeft, timerLabel, roundLabel }) {
     $('hp').textContent = Math.ceil(hp);
+    $('lowhp').classList.toggle('on', hp > 0 && hp <= 35); // battements de cœur quand on est presque mort
     const bar = $('hp-bar').firstElementChild;
     bar.style.width = `${(hp / PLAYER.MAX_HP) * 100}%`;
     bar.style.background = hp > 60 ? '#4ade80' : hp > 30 ? '#facc15' : '#ff4d6d';
@@ -88,6 +89,20 @@ export class HUD {
     }
   }
 
+  /** Grosse croix au centre quand ON tue quelqu'un */
+  killBanner(victim, headshot, streak) {
+    const b = $('kill-banner');
+    b.querySelector('.kb-name').textContent = victim;
+    const sub = [headshot ? 'TIR À LA TÊTE' : '', streak >= 2 ? ['', '', 'DOUBLÉ', 'TRIPLÉ', 'QUADRUPLÉ', 'ACE !'][Math.min(streak, 5)] : ''].filter(Boolean).join(' · ');
+    b.querySelector('.kb-sub').textContent = sub;
+    b.classList.toggle('head', !!headshot);
+    b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
+    // Texte en bas au milieu : « Vous avez éliminé PSEUDO »
+    const t = $('elim-text');
+    t.querySelector('b').textContent = victim;
+    t.classList.remove('show'); void t.offsetWidth; t.classList.add('show');
+  }
+
   /** Ajoute une ligne au killfeed (en haut à droite) */
   kill({ killer, killerTeam, victim, victimTeam, weapon, headshot }, mine = false) {
     const row = document.createElement('div');
@@ -134,6 +149,8 @@ export class HUD {
 const KILL_ICONS = {
   ak: `<svg viewBox="0 0 64 18" class="kicon"><path d="M2 8 L14 6 L16 12 L6 15 L2 14 Z M14 5 H34 V10 H14 Z M33 6 H44 V9 H33 Z M44 7 H60 V8.5 H44 Z M24 10 H28 L30 17 H26 Z M18 10 H21 L20 14 H17 Z" fill="currentColor"/></svg>`,
   kar98k: `<svg viewBox="0 0 76 18" class="kicon"><path d="M2 9 L16 7 L19 10 L52 10 L52 12 L18 13 L13 15 L2 15 Z M16 7 H30 V10 H16 Z M50 10 H74 V11.2 H50 Z M20 3 H36 V6 H20 Z M24 6 H26 V7.5 H24 Z M31 6 H33 V7.5 H31 Z" fill="currentColor"/></svg>`,
+  mp5: `<svg viewBox="0 0 54 18" class="kicon"><path d="M2 5 H5 V14 H2 Z M5 6 H12 V7.5 H5 Z M5 11 H12 V12.5 H5 Z M12 5 H34 V10 H12 Z M34 5.5 H44 V10 H34 Z M44 6.5 H51 V8.5 H44 Z M24 10 H28 L29.5 17 H26 Z M15 10 H19 L18 15 H14 Z M38 3 H40 V5.5 H38 Z" fill="currentColor"/></svg>`,
+  shotgun: `<svg viewBox="0 0 76 18" class="kicon"><path d="M2 8 L14 6.5 L18 10 L16 12 L4 15 L2 14 Z M14 5.5 H30 V10.5 H14 Z M30 6 H74 V8 H30 Z M32 9 H62 V10.8 H32 Z M36 8.5 H50 V12.5 H36 Z M20 10.5 H25 L24 13 H19 Z" fill="currentColor"/></svg>`,
   glock: `<svg viewBox="0 0 40 18" class="kicon"><path d="M3 4 H30 V8.5 H3 Z M30 5 H34 V7.5 H30 Z M5 8.5 H18 L17 10 H13 L11 16 H5.5 L7 10 Z M13 10 H17 L15.5 12.5 H13 Z" fill="currentColor"/></svg>`,
   knife: `<svg viewBox="0 0 48 18" class="kicon"><path d="M2 8 H16 V12 H2 Z M16 6 H19 V14 H16 Z M19 8 L40 8 L46 10 L40 12 L19 12 Z" fill="currentColor"/></svg>`,
   headshot: `<svg viewBox="0 0 18 18" class="kicon hs"><circle cx="9" cy="9" r="6" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M9 1 V5 M9 13 V17 M1 9 H5 M13 9 H17" stroke="currentColor" stroke-width="1.8"/><circle cx="9" cy="9" r="1.6" fill="currentColor"/></svg>`,

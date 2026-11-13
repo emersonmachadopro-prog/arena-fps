@@ -2,7 +2,7 @@
 //  solo.js — Mode entraînement hors-ligne avec des bots.
 //  Tout est calculé dans le navigateur (pas besoin du multijoueur).
 // =====================================================================
-import { PLAYER, WEAPONS } from '/shared/constants.js';
+import { PLAYER, WEAPONS, pelletDirs, pelletDamage } from '/shared/constants.js';
 import { MAP_BOXES, SPAWNS, BOT_WAYPOINTS } from '/shared/map.js';
 import { moveAndCollide, raycastWorld, traceShot, dirFromAngles } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
@@ -89,10 +89,33 @@ export class SoloSession {
   fire(origin, dir, weapon) {
     const w = WEAPONS[weapon];
     const targets = this.bots.filter(b => b.alive).map(b => ({ id: b, x: b.pos.x, y: b.pos.y, z: b.pos.z, crouch: false }));
+    if (w.pellets) {
+      // Fusil à pompe : on additionne les plombs par bot, puis un seul "coup" par bot touché
+      const per = new Map();
+      const pellets = pelletDirs(dir, w.pelletSpread, w.pellets).map(d => {
+        const r = traceShot(origin, d, targets, MAP_BOXES, w.range);
+        if (!r.hit) return { dir: d, dist: Math.min(r.wallDist, w.range), hitWall: r.wallDist < w.range };
+        const e = per.get(r.hit.id) || { dmg: 0, head: false };
+        e.dmg += pelletDamage(w, r.hit.dist, r.hit.headshot); e.head ||= r.hit.headshot;
+        per.set(r.hit.id, e);
+        return { dir: d, dist: r.hit.dist, hitPlayer: true, confirmed: true };
+      });
+      for (const [bot, e] of per) this.hitBot(bot, Math.round(e.dmg), e.head, weapon);
+      return { pellets, dist: pellets[0].dist };
+    }
     const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range);
     if (hit) {
-      const bot = hit.id;
-      bot.hp -= hit.headshot ? w.headDamage : w.damage;
+      this.hitBot(hit.id, hit.headshot ? w.headDamage : w.damage, hit.headshot, weapon);
+      return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
+    }
+    return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
+  }
+
+  /** Dégâts sur un bot (+ marqueur, kill, killfeed) */
+  hitBot(bot, amount, headshot, weapon) {
+    const hit = { headshot };
+    {
+      bot.hp -= amount;
       bot.reaction = Math.max(bot.reaction, 0.4); // le bot réagit quand on le touche
       const kill = bot.hp <= 0;
       sfx.hit(hit.headshot);
@@ -104,10 +127,9 @@ export class SoloSession {
         this.streak++;
         sfx.killStreak(this.streak, settings.killSound);
         this.ctx.hud.kill({ killer: 'Toi', killerTeam: 'A', victim: bot.name, victimTeam: 'B', weapon, headshot: hit.headshot }, true);
+        this.ctx.hud.killBanner(bot.name, hit.headshot, this.streak);
       }
-      return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
     }
-    return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
   }
 
   update(dt) {

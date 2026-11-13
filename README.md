@@ -132,7 +132,8 @@ Render redéploie automatiquement en 2-3 minutes.
 | S'accroupir | C |
 | Recharger | R |
 | Inspecter l'arme | Y |
-| Arme principale / Glock 18 / Couteau | 1 / 2 / 3 ou molette |
+| Arme principale / Glock 18 / Couteau | 1 / 2 / 3 |
+| Arme suivante / précédente | molette bas / haut (modifiable ou retirable, ex. molette = sauter) |
 | Choisir son loadout | M — en jeu, même mort en attendant de réapparaître |
 | Tableau des scores | Tab |
 | Pause / libérer la souris | Échap |
@@ -150,6 +151,10 @@ longueur, écart, épaisseur, opacité, contour, point central, dynamique ou fix
 le 5e a son petit son spécial. Ajouter un pack : `KILL_PACKS` dans `public/js/audio.js`.
 
 **Qualité graphique :** Basse (PC modestes), Moyenne, Haute (ombres douces, halo lumineux, anticrénelage, détails du décor).
+
+**Couteau :** dans l'Inventaire → carte Couteau, choisis le **couteau de combat** (animations sobres) ou le **couteau papillon** (sortie en rotation, figures autour de l'annulaire avec Y).
+
+**Spectateur :** quand tu regardes un coéquipier, tu vois quand il vise (zoom + lunette), inspecte, court, tire et recharge.
 
 **Ping :** affiché dans le tableau des scores (Tab), à côté de chaque joueur (« BOT » pour les bots).
 
@@ -169,7 +174,18 @@ Pour ajouter un skin : `shared/skins.js` (une ligne = un skin).
 **Sons :** les bruitages sont dans `public/sounds/` (générés avec ElevenLabs). Pour en changer un, remplace le
 fichier .mp3 en gardant le même nom. S'il en manque un, le jeu utilise un son fabriqué par le code.
 
+**Armes principales :** AK-47 (fusil d'assaut), **MP5** (mitraillette rapide, la « claque » du levier au rechargement à vide),
+**M870** (fusil à pompe : 9 plombs avec un motif fixe, mortel de près, pompe après chaque tir, cartouches rouges chargées une par une),
+Kar98k (verrou manœuvré par la main droite, on voit les balles dans la fenêtre et celle qui part dans la chambre).
+Arme secondaire : Glock 18. Équilibrage : `WEAPONS` dans `shared/constants.js`.
+
 **Viseurs :** mire (de base), point rouge, lunette x2.5, lunette sniper x4 (Kar98k uniquement).
+
+**Recul :** l'AK et le MP5 ont un motif de recul fixe (`RECOIL_PATTERN` dans `weapons.js`) : on peut apprendre à le contrôler.
+
+**Réseau :** 30 mises à jour par seconde, WebSocket direct, retard d'interpolation qui s'adapte à la connexion,
+marqueur de touche affiché tout de suite (le serveur confirme ensuite). Pour le meilleur ping en France,
+crée ton service Render dans la région **Frankfurt (EU Central)**.
 
 **Bots en multijoueur :** dans le salon, l'hôte peut compléter une place libre avec un bot
 (Débutant, Intermédiaire ou Fort). Si un vrai joueur rejoint et que le salon est plein, un bot lui laisse sa place.

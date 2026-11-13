@@ -9,14 +9,14 @@
 //  - chaque tir envoie l'instant affiché à l'écran : le serveur "remonte
 //    le temps" pour vérifier la touche (compensation de latence)
 // =====================================================================
-import { PLAYER, WEAPONS, TEAMS, MATCH } from '/shared/constants.js';
+import { PLAYER, WEAPONS, TEAMS, MATCH, pelletDirs } from '/shared/constants.js';
 import { MAP_BOXES } from '/shared/map.js';
 import { raycastWorld, traceShot } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
 import { sfx } from './audio.js';
 import { settings, saveSettings, activeLoadout } from './settings.js';
 
-const INTERP_DELAY = 100;
+import { INTERP } from './avatars.js';
 
 export class NetGame {
   /**
@@ -26,7 +26,9 @@ export class NetGame {
   constructor(ctx, ui) {
     this.ctx = ctx;
     this.ui = ui;
-    this.socket = io(); // se connecte au serveur qui a servi la page
+    // WebSocket direct (pas de phase "long polling") : connexion plus rapide, moins de latence
+    this.socket = io({ transports: ['websocket'], upgrade: false });
+    this.jitter = 0; this.lastArrival = 0;
     this.avatars = new Map();
     this.state = null;      // dernier état reçu du serveur
     this.lobby = null;
@@ -100,7 +102,7 @@ export class NetGame {
   onSpawn(sp) {
     const { player, weapons } = this.ctx;
     player.spawn(sp);
-    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic, secondary: sp.secondary || 'glock' }, { rack: true }); // animation d'armement (D2)
+    weapons.reset({ primary: sp.primary || 'ak', optic: sp.optic, secondary: sp.secondary || 'glock', knife: activeLoadout().knife }, { rack: true }); // animation d'armement (D2)
     weapons.setVisible(true);
     this.spectating = null;
     this.specCam = null;
@@ -109,8 +111,18 @@ export class NetGame {
 
   onState(st) {
     // Horloge : on garde l'estimation la plus "rapide" (paquets les moins retardés)
-    const sample = st.t - performance.now();
+    const nowMs = performance.now();
+    const sample = st.t - nowMs;
     this.clockOffset = this.clockOffset === null ? sample : Math.max(sample, this.clockOffset - 2);
+    // Retard d'interpolation adaptatif : petit si la connexion est stable, plus grand si elle "saccade"
+    const tick = 1000 / MATCH.TICK_RATE;
+    if (this.lastArrival) {
+      const gap = Math.abs(nowMs - this.lastArrival - tick);
+      this.jitter += (gap - this.jitter) * 0.08;
+    }
+    this.lastArrival = nowMs;
+    const want = Math.max(45, Math.min(160, tick * 1.6 + this.jitter * 2.2));
+    INTERP.delay += (want - INTERP.delay) * 0.05;
     this.state = st;
     const { player, weapons, hud } = this.ctx;
 
@@ -164,6 +176,7 @@ export class NetGame {
   }
 
   onShot(e) {
+    if (e.id === this.spectating && e.id !== this.socket.id) this.ctx.weapons.spectateShot(); // vue spectateur : recul de son arme
     const mine = e.id === this.myId;
     // Sang : seulement si le serveur a confirmé la touche
     if (e.hitPlayer) this.ctx.effects.blood(e.point);
@@ -173,8 +186,17 @@ export class NetGame {
     const from = av && !av.dead ? av.muzzleWorld() : { x: e.from.x + e.dir.x * 0.7, y: e.from.y - 0.25, z: e.from.z + e.dir.z * 0.7 }; // depuis le canon de l'arme
     if (e.weapon !== 'knife') {
       this.ctx.effects.tracer(from, to);
+      if (e.weapon === 'shotgun' && e.dir) {
+        // la gerbe de plombs (même motif que le serveur)
+        const w = WEAPONS.shotgun;
+        pelletDirs(e.dir, w.pelletSpread, w.pellets).slice(1).forEach((d, i) => {
+          if (i % 2) return;
+          const dist = raycastWorld(e.from, d, MAP_BOXES, w.range);
+          this.ctx.effects.tracer(from, { x: e.from.x + d.x * dist, y: e.from.y + d.y * dist, z: e.from.z + d.z * dist });
+        });
+      }
       if (e.hitWall) { this.ctx.effects.impact(to); sfx.impact(to); }
-      ({ kar98k: sfx.sniper, glock: sfx.pistol }[e.weapon] || sfx.shot).call(sfx, from);
+      ({ kar98k: sfx.sniper, glock: sfx.pistol, mp5: sfx.smg, shotgun: sfx.shotgun }[e.weapon] || sfx.shot).call(sfx, from);
       this.remoteShell(e.weapon, from, e.dir, av);
     } else {
       sfx.knife(from);
@@ -184,17 +206,19 @@ export class NetGame {
   /** Douille éjectée par l'arme d'un autre joueur */
   remoteShell(weapon, muzzle, dir, av) {
     if (!dir || (av && av.dead)) return;
-    const back = weapon === 'glock' ? 0.12 : weapon === 'kar98k' ? 0.55 : 0.42;
+    const back = { glock: 0.12, kar98k: 0.55, mp5: 0.3, shotgun: 0.45 }[weapon] ?? 0.42;
     const pos = { x: muzzle.x - dir.x * back, y: muzzle.y + 0.03, z: muzzle.z - dir.z * back };
     const len = Math.hypot(dir.x, dir.z) || 1;
     const rx = -dir.z / len, rz = dir.x / len; // vers la droite du tireur
     const vel = { x: rx * 1.8 + (Math.random() - 0.5) * 0.4, y: 1.6 + Math.random() * 0.5, z: rz * 1.8 + (Math.random() - 0.5) * 0.4 };
     const floor = av ? av.group.position.y : 0;
     const go = () => this.ctx.effects.shell(weapon, pos, vel, floor);
-    if (weapon === 'kar98k') setTimeout(go, 420); else go();
+    if (weapon === 'kar98k') setTimeout(go, 420); else if (weapon === 'shotgun') setTimeout(go, 280); else go();
   }
 
   onHitConfirm(e) {
+    const predicted = performance.now() - (this.predHit || 0) < 400;
+    if (predicted && !e.kill && !e.headshot) return; // déjà affiché au moment du tir
     this.ctx.hud.hitmarker(e.headshot);
     if (e.kill) { this.streak++; sfx.killStreak(this.streak, settings.killSound); }
     else sfx.hit(e.headshot);
@@ -211,6 +235,7 @@ export class NetGame {
     if (e.type === 'kill') {
       const me = this.lobby?.players.find(p => p.id === this.myId);
       this.ctx.hud.kill(e, me && (me.name === e.killer || me.name === e.victim));
+      if (me && me.name === e.killer && me.name !== e.victim) this.ctx.hud.killBanner(e.victim, e.headshot, this.streak);
     } else if (e.type === 'leave') this.ctx.hud.info(`${e.name} a quitté la partie`);
   }
 
@@ -235,7 +260,7 @@ export class NetGame {
 
   fire(origin, dir, weapon) {
     // rt = instant (horloge serveur) des positions affichées à l'écran
-    this.socket.emit('shoot', { dir, weapon, origin, rt: Math.round(this.serverNow() - INTERP_DELAY) });
+    this.socket.emit('shoot', { dir, weapon, origin, rt: Math.round(this.serverNow() - INTERP.delay) });
     // Estimation locale pour la traçante (le serveur confirmera les touches)
     const w = WEAPONS[weapon];
     const targets = [];
@@ -245,21 +270,38 @@ export class NetGame {
         targets.push({ id, x: g.x, y: g.y, z: g.z, crouch: av.crouch });
       }
     }
+    if (w.pellets) {
+      // Fusil à pompe : même motif de plombs que le serveur
+      const pellets = pelletDirs(dir, w.pelletSpread, w.pellets).map(d => {
+        const r = traceShot(origin, d, targets, MAP_BOXES, w.range, 0.1);
+        return r.hit ? { dir: d, dist: r.hit.dist, hitPlayer: true, confirmed: true } : { dir: d, dist: Math.min(r.wallDist, w.range), hitWall: r.wallDist < w.range };
+      });
+      if (pellets.some(p => p.hitPlayer)) { this.predHit = performance.now(); this.ctx.hud.hitmarker(false); sfx.hit(false); }
+      return { pellets, dist: pellets[0].dist };
+    }
     const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range, 0.1);
-    if (hit) return { dist: hit.dist, hitPlayer: true };
+    if (hit) {
+      // Touche prédite : retour immédiat (marqueur + son) sans attendre l'aller-retour serveur.
+      // Le serveur confirme ensuite (tête, kill) grâce à la compensation de latence.
+      this.predHit = performance.now();
+      this.ctx.hud.hitmarker(false);
+      sfx.hit(false);
+      return { dist: hit.dist, hitPlayer: true, confirmed: true };
+    }
     return { dist: Math.min(wallDist, w.range), hitWall: wallDist < w.range };
   }
 
   update(dt) {
     const { player, camera } = this.ctx;
 
-    // Envoi de notre position au serveur (20 fois par seconde)
+    // Envoi de notre position au serveur (30 fois par seconde)
     this.sendTimer -= dt;
     if (this.inMatch && player.alive && this.sendTimer <= 0) {
       this.sendTimer = 1 / MATCH.TICK_RATE;
       this.socket.volatile.emit('move', {
         x: player.pos.x, y: player.pos.y, z: player.pos.z,
         yaw: player.yaw, pitch: player.pitch, crouch: player.crouch,
+        ads: this.ctx.weapons.ads > 0.5, insp: !!this.ctx.weapons.inspect, spr: !!player.sprinting,
       });
     }
 

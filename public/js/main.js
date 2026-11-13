@@ -12,7 +12,7 @@ import { SoloSession } from './solo.js';
 import { NetGame } from './net.js';
 import { Showcase } from './showcase.js';
 import { LocalBody } from './body.js';
-import { initAudio, setListener, sfx, playMusic } from './audio.js';
+import { initAudio, setListener, sfx, playMusic, preloadSounds } from './audio.js';
 import { escapeHtml } from './hud.js';
 import { settings, saveSettings, keyLabel, activeLoadout } from './settings.js';
 import { WEAPONS } from '/shared/constants.js';
@@ -259,7 +259,46 @@ renderMainSide();
 showTab('play');
 showScreen('menu-main');
 refreshShowcase();
-playMusic(true); // musique des menus (démarre au premier clic si le navigateur bloque)
+
+// ---------------- Écran de chargement ----------------
+// On télécharge les sons pendant qu'il s'affiche, puis "Clique pour entrer"
+// (ce clic autorise le son : la musique du menu démarre tout de suite).
+{
+  const TIPS = [
+    'Le Kar98k tue en un tir à la tête. Vise haut !',
+    'Le fusil à pompe est mortel jusqu\'à ~10 m : rapproche-toi en glissant (Maj + C).',
+    'Le recul de l\'AK et du MP5 suit toujours le même motif : entraîne-toi à le compenser.',
+    'Tes coéquipiers sont visibles à travers les murs (silhouette).',
+    'Tu peux inspecter ton arme avec Y, même en courant.',
+    'Clic gauche pendant le rechargement du Kar98k ou du M870 : tu tires avec les balles déjà mises.',
+    'Tab affiche le score et le ping de chaque joueur.',
+    'Les boutons latéraux de la souris peuvent être assignés dans Paramètres → Commandes.',
+    'Ton viseur se personnalise dans Paramètres → Viseur.',
+  ];
+  const tip = $('ld-tip'); let ti = Math.floor(Math.random() * TIPS.length);
+  tip.textContent = TIPS[ti];
+  const tipTimer = setInterval(() => { ti = (ti + 1) % TIPS.length; tip.textContent = TIPS[ti]; }, 3500);
+  const steps = ['Chargement des armes…', 'Chargement des sons…', 'Préparation de l\'arène…'];
+  let shown = 0;
+  const minTime = new Promise(r => setTimeout(r, 1400));
+  const done = Promise.all([preloadSounds((p) => {
+    $('ld-fill').style.width = `${Math.round(p * 100)}%`;
+    const st = steps[Math.min(steps.length - 1, Math.floor(p * steps.length))];
+    if (st !== steps[shown]) { shown = steps.indexOf(st); $('ld-status').textContent = st; }
+  }), minTime]);
+  const enter = () => {
+    initAudio(); playMusic(true); sfx.click();
+    $('loading').classList.add('gone'); clearInterval(tipTimer);
+  };
+  // Lien d'invitation direct (?code=...) : pas d'attente inutile
+  done.then(() => {
+    $('ld-fill').style.width = '100%';
+    $('ld-status').textContent = 'Prêt';
+    $('ld-enter').classList.remove('hidden');
+    $('ld-enter').onclick = enter;
+    addEventListener('keydown', function k(e) { if (e.code === 'Enter' || e.code === 'Space') { removeEventListener('keydown', k); if (!$('loading').classList.contains('gone')) enter(); } });
+  });
+}
 
 // ---------------- Boucle de jeu ----------------
 let last = performance.now();
@@ -284,6 +323,9 @@ function loop() {
     if (spec) {
       weapons.setVisible(true);
       weapons.spectate(spec, dt, spec.speed || 0);
+      // zoom de la visée du coéquipier
+      const fov = 2 * Math.atan(Math.tan((settings.fov * Math.PI) / 360) / (weapons.specZoom || 1)) * 180 / Math.PI;
+      if (Math.abs(world.camera.fov - fov) > 0.05) { world.camera.fov = fov; world.camera.updateProjectionMatrix(); }
     } else {
       weapons.update(dt, input, player, session, session.canFire() && input.locked);
     }
@@ -291,7 +333,7 @@ function loop() {
     localBody.update(dt, player, weapons.current, settings.skins, !!session && player.alive && !spec, session === net ? (net.myTeam || 'A') : 'A');
     setListener(world.camera); // le son 3D suit la caméra
     hud.update(spec ? {
-      hp: spec.hp, weapon: spec.weapon, primary: spec.primary, secondary: spec.secondary || 'glock', ads: 0, optic: null, overlay: null,
+      hp: spec.hp, weapon: spec.weapon, primary: spec.primary, secondary: spec.secondary || 'glock', ads: weapons.ads, optic: weapons.currentOptic, overlay: weapons.overlay,
       mag: spec.mag, reserve: spec.reserve, reloading: spec.reloading, spread: 0.02, ...session.hudState(),
     } : {
       hp: player.hp, weapon: weapons.current, primary: weapons.primary, secondary: weapons.secondary, ads: weapons.ads,
