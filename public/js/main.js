@@ -13,6 +13,7 @@ import { NetGame } from './net.js';
 import { Showcase } from './showcase.js';
 import { LocalBody } from './body.js';
 import { initAudio, setListener, sfx, playMusic, preloadSounds } from './audio.js';
+import { account } from './account.js';
 import { escapeHtml } from './hud.js';
 import { settings, saveSettings, keyLabel, activeLoadout } from './settings.js';
 import { WEAPONS } from '/shared/constants.js';
@@ -170,6 +171,77 @@ $('btn-join').onclick = async () => {
   openLobby(await ensureNet().join(code, getName()));
 };
 $('code-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-join').click(); });
+
+// ---------------- Mode de jeu (Partie privée / Classique / Classé "pour plus tard") ----------------
+document.querySelectorAll('.mode-tile').forEach((b) => {
+  b.onclick = () => {
+    const m = b.dataset.playmode;
+    sfx.click();
+    if (m !== 'private') toast('Bientôt disponible !');
+    document.querySelectorAll('.mode-tile').forEach((x) => x.classList.toggle('active', x === b));
+    $('panel-private').classList.toggle('hidden', m !== 'private');
+    $('panel-classic').classList.toggle('hidden', m !== 'classic');
+    $('panel-ranked').classList.toggle('hidden', m !== 'ranked');
+  };
+});
+
+// ---------------- Compte (onglet Profil) ----------------
+let currentUser = null;
+function renderPseudoHint() {
+  if (!currentUser) return;
+  const elapsed = currentUser.pseudoChangedAt ? (Date.now() - currentUser.pseudoChangedAt) / 86400000 : Infinity;
+  const left = Math.ceil(currentUser.pseudoCooldownDays - elapsed);
+  $('pseudo-hint').textContent = left > 0
+    ? `Tu pourras de nouveau changer de pseudo dans ${left} jour${left > 1 ? 's' : ''}.`
+    : 'Tu peux changer de pseudo une fois par mois.';
+  $('btn-change-pseudo').disabled = left > 0;
+}
+function applyUser(user) {
+  currentUser = user;
+  $('profile-guest').classList.toggle('hidden', !!user);
+  $('profile-account').classList.toggle('hidden', !user);
+  if (user) {
+    $('profile-email').textContent = user.email;
+    $('profile-pseudo-input').value = user.pseudo;
+    renderPseudoHint();
+    $('name-input').value = user.pseudo;
+    $('name-input').readOnly = true;
+    $('name-input').title = 'Géré depuis l’onglet Profil (compte connecté)';
+    settings.name = user.pseudo; saveSettings();
+  } else {
+    $('name-input').readOnly = false;
+    $('name-input').title = '';
+  }
+  renderMainSide();
+}
+account.me().then(applyUser).catch(() => {});
+
+$('form-login').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('login-error').textContent = '';
+  try {
+    const user = await account.login($('login-email').value.trim(), $('login-password').value);
+    applyUser(user); toast(`Connecté — bienvenue ${user.pseudo} !`);
+    e.target.reset();
+  } catch (err) { $('login-error').textContent = err.message; }
+});
+$('form-signup').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('signup-error').textContent = '';
+  try {
+    const user = await account.signup($('signup-email').value.trim(), $('signup-password').value, $('signup-pseudo').value.trim());
+    applyUser(user); toast(`Compte créé — bienvenue ${user.pseudo} !`);
+    e.target.reset();
+  } catch (err) { $('signup-error').textContent = err.message; }
+});
+$('btn-logout').onclick = async () => { try { await account.logout(); } catch {} applyUser(null); toast('Déconnecté.'); };
+$('btn-change-pseudo').onclick = async () => {
+  $('pseudo-error').textContent = '';
+  try {
+    const user = await account.changePseudo($('profile-pseudo-input').value.trim());
+    applyUser(user); toast('Pseudo mis à jour.');
+  } catch (err) { $('pseudo-error').textContent = err.message; }
+};
 
 // Quand les skins ou le loadout changent : on met à jour l'arme en main, l'aperçu et le serveur
 function onGearChange() {

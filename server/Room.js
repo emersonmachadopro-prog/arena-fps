@@ -10,7 +10,8 @@ import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
 import { traceShot } from '../shared/physics.js';
 
-const MODES = { '1v1': 1, '2v2': 2 };
+const MODES = { '1v1': 1, '2v2': 2, '3v3': 3 };
+const MAX_ROOM = 6; // le plus grand mode (3v3) : 3 par équipe
 
 export class Room {
   constructor(code, io, onEmpty) {
@@ -62,9 +63,9 @@ export class Room {
 
   addPlayer(socket, name, skins, loadout) {
     if (this.state !== 'lobby') return 'La partie a déjà commencé.';
-    if (this.humans.length >= 4) return 'Le salon est plein.';
+    if (this.humans.length >= MAX_ROOM) return 'Le salon est plein.';
     // Plus de place ? On retire un bot pour laisser la place à un vrai joueur
-    if (this.players.size >= 4) {
+    if (this.players.size >= MAX_ROOM) {
       const bot = [...this.players.values()].find(b => b.isBot);
       if (bot) this.players.delete(bot.id);
     }
@@ -149,7 +150,7 @@ export class Room {
   // ---------------------------------------------------------------
   addBot(id, team, level) {
     if (id !== this.hostId || this.state !== 'lobby' || !TEAMS[team] || !BOT_LEVELS[level]) return;
-    if (this.teamCount(team) >= this.teamSize || this.players.size >= 4) return;
+    if (this.teamCount(team) >= this.teamSize || this.players.size >= this.teamSize * 2) return;
     const n = [...this.players.values()].filter(p => p.isBot).length + 1;
     const skinsList = ['desert', 'jungle', 'arctic', 'shadow', 'royal'];
     const bot = this.makePlayer(`bot-${Date.now()}-${n}`, `Bot ${BOT_LEVELS[level].name}`,

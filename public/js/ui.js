@@ -182,7 +182,7 @@ export function initTabs(onChange) {
 }
 export function showTab(tab) {
   document.querySelectorAll('.topnav .tab[data-tab]').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
-  for (const t of ['play', 'skins', 'inventory']) $(`tab-${t}`).classList.toggle('hidden', t !== tab);
+  for (const t of ['play', 'skins', 'inventory', 'profile']) $(`tab-${t}`).classList.toggle('hidden', t !== tab);
 }
 
 // ---------------------------------------------------------------------
@@ -511,7 +511,7 @@ export function initSettingsMenu() {
 /** actions = { addBot(team, level), removeBot(id) } */
 export function renderLobby(lobby, myId, netInfo, actions) {
   $('lobby-code').textContent = lobby.code;
-  const size = lobby.mode === '2v2' ? 2 : 1;
+  const size = { '1v1': 1, '2v2': 2, '3v3': 3 }[lobby.mode] || 1;
   const isHost = lobby.hostId === myId;
   const me = lobby.players.find(p => p.id === myId);
 

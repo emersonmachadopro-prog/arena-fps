@@ -79,6 +79,7 @@
           <button class="tab active" data-tab="play">Jouer</button>
           <button class="tab" data-tab="skins">Personnage</button>
           <button class="tab" data-tab="inventory">Inventaire</button>
+          <button class="tab" data-tab="profile">Profil</button>
           <button class="tab" id="btn-settings-main">Paramètres</button>
         </div>
         <div class="profile">
@@ -91,13 +92,34 @@
       <div class="tab-page" id="tab-play">
         <div class="left-col">
           <div class="card">
-            <div class="card-title">🌐 Jouer en ligne</div>
+            <div class="card-title">🕹️ Mode de jeu</div>
+            <div class="tiles mode-tiles">
+              <button class="tile mode-tile active" data-playmode="private"><b>🎮 Partie privée</b><small>Bots, amis, 1v1 à 3v3</small></button>
+              <button class="tile mode-tile" data-playmode="classic"><b>🏟️ Classique <span class="soon-badge">Bientôt</span></b><small>Matchmaking public</small></button>
+              <button class="tile mode-tile" data-playmode="ranked"><b>🏆 Classé <span class="soon-badge">Bientôt</span></b><small>Avec classement</small></button>
+            </div>
+          </div>
+          <div class="card" id="panel-private">
+            <div class="card-title">🌐 Partie privée</div>
             <button id="btn-create" class="big primary huge">Créer une partie</button>
             <div class="join-row">
               <input id="code-input" maxlength="5" placeholder="CODE" class="code" />
               <button id="btn-join" class="big">Rejoindre</button>
             </div>
-            <p class="hint">Crée une partie et envoie le code à tes potes. Il manque du monde ? Ajoute des bots dans le salon.</p>
+            <p class="hint">Crée une partie et envoie le code à tes potes. Choisis 1v1, 2v2 ou 3v3 dans le salon. Il manque du monde ? Ajoute des bots.</p>
+          </div>
+          <div class="card hidden" id="panel-classic">
+            <div class="card-title">🏟️ Classique <span class="soon-badge">Bientôt disponible</span></div>
+            <p class="hint">File d'attente publique avec des joueurs au hasard. En attendant, joue en partie privée ou à l'entraînement.</p>
+            <div class="tiles">
+              <button class="tile soon" disabled><b>1 vs 1</b><small>Bientôt</small></button>
+              <button class="tile soon" disabled><b>2 vs 2</b><small>Bientôt</small></button>
+              <button class="tile soon" disabled><b>3 vs 3</b><small>Bientôt</small></button>
+            </div>
+          </div>
+          <div class="card hidden" id="panel-ranked">
+            <div class="card-title">🏆 Classé <span class="soon-badge">Bientôt disponible</span></div>
+            <p class="hint">Un classement par saison, avec rangs et récompenses, arrivera avec le mode Classé.</p>
           </div>
           <div class="card">
             <div class="card-title">🎯 Entraînement</div>
@@ -120,6 +142,49 @@
             <div class="card-title">🧍 Tenue du personnage</div>
             <p class="hint">Les skins d'armes sont dans l'Inventaire.</p>
             <div id="locker-grid" class="skin-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Onglet PROFIL (compte : e-mail + mot de passe, pseudo lié au compte) -->
+      <div class="tab-page hidden" id="tab-profile">
+        <div class="left-col wide-col">
+          <!-- Pas connecté : connexion / création de compte -->
+          <div class="card hidden" id="profile-guest">
+            <div class="card-title">👤 Compte</div>
+            <p class="hint">Crée un compte pour garder ton pseudo partout, même sur un autre appareil. Sans compte, tu restes « invité » : ton pseudo est juste local à ce navigateur.</p>
+            <div class="auth-grid">
+              <form id="form-login" class="auth-box">
+                <h3>Connexion</h3>
+                <input type="email" id="login-email" placeholder="E-mail" autocomplete="username" required />
+                <input type="password" id="login-password" placeholder="Mot de passe" autocomplete="current-password" required />
+                <button type="submit" class="big primary">Se connecter</button>
+                <p class="error" id="login-error"></p>
+              </form>
+              <form id="form-signup" class="auth-box">
+                <h3>Créer un compte</h3>
+                <input type="text" id="signup-pseudo" maxlength="16" placeholder="Pseudo (3-16 caractères)" required />
+                <input type="email" id="signup-email" placeholder="E-mail" autocomplete="username" required />
+                <input type="password" id="signup-password" placeholder="Mot de passe (6 min.)" autocomplete="new-password" required />
+                <button type="submit" class="big primary">Créer mon compte</button>
+                <p class="error" id="signup-error"></p>
+              </form>
+            </div>
+          </div>
+          <!-- Connecté -->
+          <div class="card hidden" id="profile-account">
+            <div class="card-title">👤 Mon compte</div>
+            <div class="profile-row"><span class="kicker">E-mail</span><b id="profile-email"></b></div>
+            <div class="profile-row">
+              <span class="kicker">Pseudo</span>
+              <div class="row tight">
+                <input type="text" id="profile-pseudo-input" maxlength="16" />
+                <button id="btn-change-pseudo" class="small">Changer</button>
+              </div>
+            </div>
+            <p class="hint" id="pseudo-hint">Tu peux changer de pseudo une fois par mois.</p>
+            <p class="error" id="pseudo-error"></p>
+            <button id="btn-logout" class="ghost">Se déconnecter</button>
           </div>
         </div>
       </div>
@@ -148,6 +213,7 @@
         <div class="segmented">
           <button class="mode-btn" data-mode="1v1">1 vs 1</button>
           <button class="mode-btn" data-mode="2v2">2 vs 2</button>
+          <button class="mode-btn" data-mode="3v3">3 vs 3</button>
         </div>
         <span id="mode-hint" class="hint"></span>
         <div class="lobby-code-box">

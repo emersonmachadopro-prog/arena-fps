@@ -158,6 +158,24 @@ const clamp01 = (t) => Math.max(0, Math.min(1, t));
 const UP = new THREE.Vector3(0, 1, 0);
 
 /**
+ * Ressort critique (amorti pile ce qu'il faut) : ramène `pos` vers `target` sans
+ * jamais osciller, quelle que soit la durée de l'image (dt). Formule fermée stable
+ * (Game Programming Gems 4 / "SmoothDamp") — contrairement à une intégration
+ * d'Euler classique (vitesse += -raideur*x*dt), qui devient sous-amortie et se met
+ * à vibrer dès que le taux d'images varie un peu (c'était la cause du tremblement
+ * des mains/de l'arme quand on bouge la souris).
+ * smoothTime = temps (s) pour combler l'essentiel de l'écart.
+ */
+function springTo(pos, vel, target, smoothTime, dt) {
+  const omega = 2 / Math.max(smoothTime, 0.0001);
+  const x = omega * dt;
+  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = pos - target;
+  const temp = (vel + omega * change) * dt;
+  return [target + (change + temp) * exp, (vel - omega * temp) * exp];
+}
+
+/**
  * Animation par "images clés" : keys = [[t, {valeurs}], ...] (t de 0 à 1).
  * Retourne les valeurs interpolées en douceur au temps t.
  */
@@ -737,8 +755,9 @@ export class WeaponSystem {
   addLook(dx, dy) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
     const k = 1 - this.ads * 0.8;
-    this.sway.vx += Math.max(-40, Math.min(40, dx)) * 0.00012 * k;
-    this.sway.vy += Math.max(-40, Math.min(40, dy)) * 0.00012 * k;
+    // Impulsion de vitesse (position exprimée en unités/s pour le ressort critique ci-dessous)
+    this.sway.vx += Math.max(-40, Math.min(40, dx)) * 0.0072 * k;
+    this.sway.vy += Math.max(-40, Math.min(40, dy)) * 0.0072 * k;
   }
 
   /** Atterrissage après un saut / une chute (E3) */
@@ -1045,12 +1064,13 @@ export class WeaponSystem {
     this._player = player;
     this.slideBack = Math.max(0, this.slideBack - dt * 14);
 
-    // Inertie : ressort amorti qui ramène l'arme au centre
+    // Inertie : ressort critique qui ramène l'arme au centre sans jamais vibrer
+    // (l'ancienne intégration d'Euler était sous-amortie → tremblement à la souris)
     const sw = this.sway;
     if (![sw.x, sw.y, sw.vx, sw.vy].every(Number.isFinite)) { sw.x = sw.y = sw.vx = sw.vy = 0; }
-    sw.vx +=-sw.x * 120 * dt; sw.vy += -sw.y * 120 * dt;
-    sw.vx *= Math.max(0, 1 - 14 * dt); sw.vy *= Math.max(0, 1 - 14 * dt);
-    sw.x += sw.vx * dt * 60; sw.y += sw.vy * dt * 60;
+    const dtc = Math.min(dt, 0.1); // sécurité : jamais de grand saut même après une pause d'onglet
+    [sw.x, sw.vx] = springTo(sw.x, sw.vx, 0, 0.15, dtc);
+    [sw.y, sw.vy] = springTo(sw.y, sw.vy, 0, 0.15, dtc);
     sw.x = Math.max(-0.06, Math.min(0.06, sw.x)); sw.y = Math.max(-0.06, Math.min(0.06, sw.y));
 
     const t = performance.now() / 1000;
@@ -1269,11 +1289,51 @@ function gloveMaterial(id) {
 function armMaterials(skins = settings.skins) {
   // La manche prend la couleur de la tenue choisie dans le casier
   const suit = CHARACTER_SKINS[skins?.character]?.suit ?? 0x3a4560;
+  const cuff = new THREE.Color(suit).multiplyScalar(0.72).getHex();
   return {
     sleeve: mat(suit, { map: fabricTex(), roughness: 0.95 }),
+    cuff: mat(cuff, { roughness: 0.9 }),           // ourlet de la manche courte (au coude)
+    skin: mat(SKIN, { roughness: 0.68 }),          // avant-bras nu, comme le personnage (manches courtes)
     glove: gloveMaterial(skins?.gloves),
     knuckle: mat(0x3e352b, { roughness: 0.6 }),
   };
+}
+
+/** Petite sphère (jointures, raccords lisses entre segments d'un membre) */
+function ball(r, material, x, y, z) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), material);
+  m.position.set(x, y, z);
+  return m;
+}
+
+/**
+ * Avant-bras, construit le long de l'axe Y LOCAL (de +len0/2 = coude à -len0/2 = poignet),
+ * pour pouvoir être réétiré (scale.y) à chaque image quand le poignet bouge (rechargements,
+ * verrou du Kar98k…) sans perdre ses proportions. Manche courte (ourlet au coude) puis peau
+ * nue qui s'affine vers le poignet — même style que le personnage.
+ */
+function limbMesh(len0, M) {
+  const g = new THREE.Group();
+  const h = len0 / 2;
+  // Fractions de la demi-longueur (1 = coude, -1 = poignet) et rayon de chaque tronçon :
+  // ourlet de manche très court, puis la peau s'affine en douceur sur plusieurs tronçons
+  // (comme les doigts) pour éviter l'effet "boudin" d'un raccord brutal.
+  const stops = [1, 0.74, 0.4, 0.04, -1];
+  const radii = [0.053, 0.047, 0.041, 0.034];
+  const mats = [M.cuff, M.skin, M.skin, M.skin];
+  for (let i = 0; i < 4; i++) {
+    g.add(capsule([0, stops[i] * h, 0], [0, stops[i + 1] * h, 0], radii[i], mats[i]));
+    if (i > 0) g.add(ball((radii[i - 1] + radii[i]) / 2, mats[i], 0, stops[i] * h, 0));
+  }
+  return g;
+}
+/** Avant-bras statique entre deux points du monde (armes tenues à deux mains fixes : couteaux) */
+function limbBetween(a, b, M) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b);
+  const g = limbMesh(A.distanceTo(B), M);
+  g.position.copy(A).add(B).multiplyScalar(0.5);
+  g.quaternion.setFromUnitVectors(UP, B.clone().sub(A).normalize());
+  return g;
 }
 
 /** Main droite sur une poignée (paume sur la droite, doigts autour, index sur la détente) */
@@ -1291,15 +1351,18 @@ function rightGripHand(g, M, pos, forearmEnd, tilt = 0.3) {
   const rel = (p) => [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
   const wrist = [0.02, -0.035, 0.08];
   group.add(capsule([0, -0.012, 0.025], wrist, 0.033, M.glove));     // poignet (gant)
-  // Avant-bras : relié au coude (fixe) et au poignet (qui bouge avec la main) → il pivote naturellement
-  const fa = capsule([pos[0] + wrist[0], pos[1] + wrist[1], pos[2] + wrist[2]], forearmEnd, 0.05, M.sleeve);
+  // Avant-bras : relié au coude (fixe) et au poignet (qui bouge avec la main) → il pivote et s'étire naturellement
+  const elbow = new THREE.Vector3(...forearmEnd), w0 = new THREE.Vector3(...wrist).add(group.position);
+  const len0 = w0.distanceTo(elbow);
+  const fa = limbMesh(len0, M);
+  fa.position.copy(w0).add(elbow).multiplyScalar(0.5);
+  fa.quaternion.setFromUnitVectors(UP, elbow.clone().sub(w0).normalize());
   g.add(fa);
   g.add(group);
   g.userData.rightHand = group;
   g.userData.rightHome = group.position.clone();
   g.userData.rHand = hand; // squelette (poses des doigts)
-  const elbow = new THREE.Vector3(...forearmEnd), w0 = new THREE.Vector3(...wrist).add(group.position);
-  g.userData.rightArm = { mesh: fa, elbow, wristLocal: new THREE.Vector3(...wrist), len0: w0.distanceTo(elbow) };
+  g.userData.rightArm = { mesh: fa, elbow, wristLocal: new THREE.Vector3(...wrist), len0 };
 }
 
 /** Main gauche sous le garde-main (groupe animable : main + avant-bras) */
@@ -1313,7 +1376,7 @@ function leftSupportHand(g, M, pos, forearmEnd) {
   const rel = (p) => [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
   const wrist = [-0.07, -0.05, 0.05];
   group.add(capsule([-0.025, -0.012, 0.005], wrist, 0.033, M.glove));
-  group.add(capsule(wrist, rel(forearmEnd), 0.052, M.sleeve));
+  group.add(limbBetween(wrist, rel(forearmEnd), M));
   g.add(group);
   g.userData.leftHand = group;
   g.userData.leftHome = group.position.clone();
@@ -1338,7 +1401,7 @@ function pistolSupportHand(g, M, pos, forearmEnd) {
   const wrist = zAxis.clone().multiplyScalar(0.075).add(new THREE.Vector3(-0.012, 0, 0));
   group.add(capsule([zAxis.x * 0.03, zAxis.y * 0.03, zAxis.z * 0.03], wrist.toArray(), 0.033, M.glove));
   const rel = [forearmEnd[0] - pos[0], forearmEnd[1] - pos[1], forearmEnd[2] - pos[2]];
-  group.add(capsule(wrist.toArray(), rel, 0.05, M.sleeve));
+  group.add(limbBetween(wrist.toArray(), rel, M));
   g.add(group);
   g.userData.leftHand = group;
   g.userData.leftHome = group.position.clone();
@@ -1595,7 +1658,7 @@ function buildButterfly(skin, skinId, skins) {
   orientHand(hand, [0, -1, 0], [1, 0, 0], [0, 0, 1]);     // index en haut, paume à gauche, doigts vers -z
   frame.add(hand);
   handG.add(capsule([0, -0.02, 0.0], [0.01, -0.07, 0.03], 0.034, M.glove));      // poignet (sous la main)
-  handG.add(capsule([0.01, -0.07, 0.03], [0.07, -0.4, 0.26], 0.05, M.sleeve));    // avant-bras vers le bas et vers nous
+  handG.add(limbBetween([0.01, -0.07, 0.03], [0.07, -0.4, 0.26], M));            // avant-bras vers le bas et vers nous
   g.add(handG);
   g.userData.hand = handG;
   g.userData.kHand = hand;
@@ -1669,7 +1732,7 @@ function buildKnife(skin, skinId, skins) {
   hand.position.set(0.03, 0.022, 0.065);
   handG.add(hand);
   handG.add(capsule([0.02, 0, 0.1], [0.04, -0.04, 0.19], 0.034, M.glove));
-  handG.add(capsule([0.04, -0.04, 0.19], [0.1, -0.16, 0.5], 0.05, M.sleeve));
+  handG.add(limbBetween([0.04, -0.04, 0.19], [0.1, -0.16, 0.5], M));
   g.add(handG);
   g.userData.hand = handG;
   g.userData.kHand = hand;

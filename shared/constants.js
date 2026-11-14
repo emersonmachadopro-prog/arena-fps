@@ -97,23 +97,27 @@ export const WEAPONS = {
   mp5: {
     name: 'MP5',
     slot: 'primary',
-    damage: 21,
-    headDamage: 62,
+    // Rééquilibrage : la MP5 restait presque aussi précise que l'AK tout en tirant plus
+    // vite et en punissant à peine le mouvement/recul → elle dominait toutes les
+    // distances. Elle garde sa cadence et son chargeur pour rester une bonne arme de
+    // CQB, mais perd un peu de dégâts et de précision hors visée pour laisser l'AK
+    // compétitive à distance moyenne.
+    damage: 18,            // 6 balles au corps pour tuer (AK : 4)
+    headDamage: 58,
     fireInterval: 0.075,   // 800 coups/min
     auto: true,
     magSize: 30,
     reserve: 120,
     reloadTime: 1.9,
     reloadEmptyTime: 2.4,
-    range: 120,
-    hipSpread: 0.03,       // précis même sans viser (mitraillette)
-    adsSpread: 0.003,
-    moveSpread: 0.02,
-    airSpread: 0.07,
-    burstSpread: 0.0028,
-    recoilKick: 0.0075,
+    range: 110,
+    hipSpread: 0.037,      // plus proche de l'AK : ce n'est plus un laser sans viser
+    adsSpread: 0.0032,
+    moveSpread: 0.03,
+    airSpread: 0.09,
+    burstSpread: 0.0032,
+    recoilKick: 0.0098,    // un peu plus dur à contrôler en rafale
     adsSpeed: 16,
-    moveSpeed: 1.05,       // un peu plus rapide en courant
   },
   shotgun: {
     name: 'M870',

@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { Server } from 'socket.io';
 import { Room } from './Room.js';
+import { signup, login, logout, userFromToken, changePseudo } from './accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -30,6 +31,55 @@ app.use('/shared', express.static(path.join(ROOT, 'shared')));
 app.use('/vendor/three', express.static(path.join(ROOT, 'node_modules/three/build')));
 app.use('/vendor/three-addons', express.static(path.join(ROOT, 'node_modules/three/examples/jsm')));
 app.get('/health', (_req, res) => res.send('ok'));
+app.use(express.json());
+
+// ---- Comptes (e-mail + mot de passe, pseudo lié au compte) ----
+// Pas de dépendance cookie-parser : on lit l'en-tête nous-mêmes (un seul cookie).
+const COOKIE = 'as_session';
+function readSessionToken(req) {
+  const header = req.headers.cookie;
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const i = part.indexOf('=');
+    if (i < 0) continue;
+    if (part.slice(0, i).trim() === COOKIE) return decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return null;
+}
+function setSessionCookie(res, token) {
+  res.setHeader('Set-Cookie', `${COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${60 * 60 * 24 * 180}; SameSite=Lax`);
+}
+function clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
+}
+app.post('/api/auth/signup', (req, res) => {
+  const r = signup(req.body || {});
+  if (r.error) return res.status(400).json({ error: r.error });
+  setSessionCookie(res, r.token);
+  res.json({ user: r.user });
+});
+app.post('/api/auth/login', (req, res) => {
+  const r = login(req.body || {});
+  if (r.error) return res.status(400).json({ error: r.error });
+  setSessionCookie(res, r.token);
+  res.json({ user: r.user });
+});
+app.post('/api/auth/logout', (req, res) => {
+  const token = readSessionToken(req);
+  if (token) logout(token);
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+app.get('/api/auth/me', (req, res) => {
+  res.json({ user: userFromToken(readSessionToken(req)) });
+});
+app.post('/api/auth/pseudo', (req, res) => {
+  const token = readSessionToken(req);
+  if (!token) return res.status(401).json({ error: 'Non connecté.' });
+  const r = changePseudo(token, req.body?.pseudo);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ user: r.user });
+});
 
 // Adresses IP de ce PC sur le réseau local (Wi-Fi / box).
 // Sert à fabriquer un lien d'invitation qui marche pour les potes
