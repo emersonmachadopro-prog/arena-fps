@@ -119,6 +119,39 @@ Render redéploie automatiquement en 2-3 minutes.
 
 ---
 
+## 3bis. Rendre les comptes joueurs permanents (MongoDB Atlas, gratuit)
+
+Sans rien faire, les comptes (e-mail + mot de passe + pseudo, onglet **Profil**) sont stockés
+dans un simple fichier sur le serveur. Ça marche très bien pour tester, **mais sur Render ce
+fichier est effacé à chaque fois que tu mets le jeu à jour** (le disque gratuit est "jetable").
+
+Pour que les comptes restent pour de vrai, pour toujours, même après une mise à jour :
+
+1. Va sur **https://www.mongodb.com/cloud/atlas/register** et crée un compte gratuit
+   (aucune carte bancaire demandée pour l'offre **M0 Free**, 512 Mo — largement assez pour
+   commencer).
+2. Crée un cluster **M0 (Free)**, région au choix (Europe de préférence).
+3. **Database Access** → crée un utilisateur (identifiant + mot de passe — note-les).
+4. **Network Access** → **Add IP Address** → **Allow access from anywhere** (`0.0.0.0/0`)
+   — Render se connecte depuis une adresse qui change, c'est le plus simple.
+5. **Connect** → **Drivers** → copie l'adresse du style :
+   ```
+   mongodb+srv://tonUtilisateur:tonMotDePasse@cluster0.xxxxx.mongodb.net/
+   ```
+6. Sur **Render**, ouvre ton service → **Environment** → **Add Environment Variable** :
+   | Clé | Valeur |
+   |---|---|
+   | `MONGODB_URI` | l'adresse copiée à l'étape 5 (remplace `tonMotDePasse` par le vrai mot de passe) |
+
+Render redéploie tout seul. Dans les logs, tu dois voir :
+`✅ Comptes joueurs stockés dans MongoDB (base « arenastrike ») — permanents.`
+
+À partir de là, tous les comptes créés restent **pour toujours**, même si tu mets le jeu à
+jour cent fois. Sans cette variable, le jeu continue de marcher normalement (il revient tout
+seul au fichier local) — pratique pour tester sur ton PC sans toucher à Atlas.
+
+---
+
 ## 4. Commandes du jeu (modifiables dans ⚙ Paramètres)
 
 | Action | Touche par défaut |

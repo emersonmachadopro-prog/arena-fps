@@ -52,34 +52,39 @@ function setSessionCookie(res, token) {
 function clearSessionCookie(res) {
   res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`);
 }
-app.post('/api/auth/signup', (req, res) => {
-  const r = signup(req.body || {});
+// asyncRoute : évite de répéter le try/catch (une erreur inattendue → 500, jamais un plantage du serveur)
+const asyncRoute = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => {
+  console.error('Erreur compte :', e);
+  res.status(500).json({ error: 'Erreur serveur, réessaie.' });
+});
+app.post('/api/auth/signup', asyncRoute(async (req, res) => {
+  const r = await signup(req.body || {});
   if (r.error) return res.status(400).json({ error: r.error });
   setSessionCookie(res, r.token);
   res.json({ user: r.user });
-});
-app.post('/api/auth/login', (req, res) => {
-  const r = login(req.body || {});
+}));
+app.post('/api/auth/login', asyncRoute(async (req, res) => {
+  const r = await login(req.body || {});
   if (r.error) return res.status(400).json({ error: r.error });
   setSessionCookie(res, r.token);
   res.json({ user: r.user });
-});
+}));
 app.post('/api/auth/logout', (req, res) => {
   const token = readSessionToken(req);
   if (token) logout(token);
   clearSessionCookie(res);
   res.json({ ok: true });
 });
-app.get('/api/auth/me', (req, res) => {
-  res.json({ user: userFromToken(readSessionToken(req)) });
-});
-app.post('/api/auth/pseudo', (req, res) => {
+app.get('/api/auth/me', asyncRoute(async (req, res) => {
+  res.json({ user: await userFromToken(readSessionToken(req)) });
+}));
+app.post('/api/auth/pseudo', asyncRoute(async (req, res) => {
   const token = readSessionToken(req);
   if (!token) return res.status(401).json({ error: 'Non connecté.' });
-  const r = changePseudo(token, req.body?.pseudo);
+  const r = await changePseudo(token, req.body?.pseudo);
   if (r.error) return res.status(400).json({ error: r.error });
   res.json({ user: r.user });
-});
+}));
 
 // Adresses IP de ce PC sur le réseau local (Wi-Fi / box).
 // Sert à fabriquer un lien d'invitation qui marche pour les potes
