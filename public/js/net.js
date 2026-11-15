@@ -9,7 +9,7 @@
 //  - chaque tir envoie l'instant affiché à l'écran : le serveur "remonte
 //    le temps" pour vérifier la touche (compensation de latence)
 // =====================================================================
-import { PLAYER, WEAPONS, TEAMS, MATCH, pelletDirs } from '/shared/constants.js';
+import { PLAYER, WEAPONS, TEAMS, MATCH, pelletDirs, hitPad } from '/shared/constants.js';
 import { MAP_BOXES } from '/shared/map.js';
 import { raycastWorld, traceShot } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
@@ -280,7 +280,7 @@ export class NetGame {
       if (pellets.some(p => p.hitPlayer)) { this.predHit = performance.now(); this.ctx.hud.hitmarker(false); sfx.hit(false); }
       return { pellets, dist: pellets[0].dist };
     }
-    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range, 0.1);
+    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range, hitPad(weapon));
     if (hit) {
       // Touche prédite : retour immédiat (marqueur + son) sans attendre l'aller-retour serveur.
       // Le serveur confirme ensuite (tête, kill) grâce à la compensation de latence.

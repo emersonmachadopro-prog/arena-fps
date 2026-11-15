@@ -41,6 +41,14 @@ export const HITBOX = {
   },
 };
 export const LEG_DAMAGE = 0.75; // dégâts aux jambes = 75 % des dégâts au corps
+/**
+ * Marge ajoutée autour des hitbox avant de lancer le rayon du tir (mètres).
+ * Les armes à feu ont de la dispersion pour compenser une petite erreur de visée ;
+ * le couteau n'en a AUCUNE (rayon pile dans l'axe du regard, portée 2,2 m) → sans
+ * marge, la moindre petite erreur de rewind réseau ou de visée fait passer le coup
+ * à travers sans dégâts. On agrandit donc beaucoup plus les hitbox au corps à corps.
+ */
+export function hitPad(weaponId) { return weaponId === 'knife' ? 0.5 : 0.12; }
 /** Dégâts d'une balle selon la zone touchée ('head' | 'torso' | 'legs') */
 export function zoneDamage(w, zone) {
   return zone === 'head' ? w.headDamage : w.damage * (zone === 'legs' ? LEG_DAMAGE : 1);

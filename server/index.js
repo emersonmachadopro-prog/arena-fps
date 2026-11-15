@@ -12,7 +12,7 @@ import { fileURLToPath } from 'url';
 import os from 'os';
 import { Server } from 'socket.io';
 import { Room } from './Room.js';
-import { signup, login, logout, userFromToken, changePseudo } from './accounts.js';
+import { signup, login, logout, userFromToken, changePseudo, addFriend, removeFriend, listFriends } from './accounts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -36,8 +36,7 @@ app.use(express.json());
 // ---- Comptes (e-mail + mot de passe, pseudo lié au compte) ----
 // Pas de dépendance cookie-parser : on lit l'en-tête nous-mêmes (un seul cookie).
 const COOKIE = 'as_session';
-function readSessionToken(req) {
-  const header = req.headers.cookie;
+function parseCookieHeader(header) {
   if (!header) return null;
   for (const part of header.split(';')) {
     const i = part.indexOf('=');
@@ -46,6 +45,7 @@ function readSessionToken(req) {
   }
   return null;
 }
+function readSessionToken(req) { return parseCookieHeader(req.headers.cookie); }
 function setSessionCookie(res, token) {
   res.setHeader('Set-Cookie', `${COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${60 * 60 * 24 * 180}; SameSite=Lax`);
 }
@@ -86,6 +86,32 @@ app.post('/api/auth/pseudo', asyncRoute(async (req, res) => {
   res.json({ user: r.user });
 }));
 
+// ---- Amis (ajoutés par pseudo) : liste + qui est connecté en ce moment ----
+// onlineUsers : id de compte -> ensemble des sockets ouvertes pour ce compte (plusieurs onglets possibles)
+const onlineUsers = new Map();
+function withOnline(friends) { return friends.map(f => ({ ...f, online: onlineUsers.has(f.id) })); }
+app.get('/api/friends', asyncRoute(async (req, res) => {
+  const token = readSessionToken(req);
+  if (!token) return res.status(401).json({ error: 'Non connecté.' });
+  const r = await listFriends(token);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ friends: withOnline(r.friends) });
+}));
+app.post('/api/friends/add', asyncRoute(async (req, res) => {
+  const token = readSessionToken(req);
+  if (!token) return res.status(401).json({ error: 'Non connecté.' });
+  const r = await addFriend(token, req.body?.pseudo);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ friends: withOnline(r.friends) });
+}));
+app.post('/api/friends/remove', asyncRoute(async (req, res) => {
+  const token = readSessionToken(req);
+  if (!token) return res.status(401).json({ error: 'Non connecté.' });
+  const r = await removeFriend(token, req.body?.pseudo);
+  if (r.error) return res.status(400).json({ error: r.error });
+  res.json({ friends: withOnline(r.friends) });
+}));
+
 // Adresses IP de ce PC sur le réseau local (Wi-Fi / box).
 // Sert à fabriquer un lien d'invitation qui marche pour les potes
 // connectés au même Wi-Fi (localhost ne marche QUE sur ton propre PC).
@@ -118,12 +144,32 @@ function makeCode() {
 
 io.on('connection', (socket) => {
   let room = null; // le salon de ce joueur
+  let accountId = null; // id du compte connecté (présence pour les amis)
 
   const leave = () => {
     if (room) { socket.leave(room.code); room.removePlayer(socket.id); room = null; }
   };
 
-  socket.on('createRoom', ({ name, skins, loadout } = {}, reply) => {
+  // Un compte est-il connecté sur cette socket ? (le navigateur envoie le cookie de session
+  // automatiquement avec la requête de connexion Socket.io, comme pour une requête HTTP normale)
+  userFromToken(parseCookieHeader(socket.handshake.headers.cookie)).then((user) => {
+    if (user) {
+      accountId = user.id;
+      if (!onlineUsers.has(accountId)) onlineUsers.set(accountId, new Set());
+      onlineUsers.get(accountId).add(socket.id);
+    }
+  });
+
+  // Revérifié à chaque fois (pas juste en cache depuis la connexion) : la requête de connexion
+  // Socket.io et le premier message du client peuvent arriver avant que la vérification du
+  // cookie à la connexion n'ait fini (surtout avec une vraie base de données un peu lente).
+  async function requireAccount() {
+    const user = await userFromToken(parseCookieHeader(socket.handshake.headers.cookie));
+    return user ? user.id : null;
+  }
+  socket.on('createRoom', async ({ name, skins, loadout } = {}, reply) => {
+    const uid = await requireAccount();
+    if (!uid) return reply?.({ ok: false, error: 'Connecte-toi (onglet Profil) pour jouer.' });
     leave();
     const code = makeCode();
     room = new Room(code, io, (c) => rooms.delete(c));
@@ -132,7 +178,9 @@ io.on('connection', (socket) => {
     reply?.({ ok: true, code });
   });
 
-  socket.on('joinRoom', ({ code, name, skins, loadout } = {}, reply) => {
+  socket.on('joinRoom', async ({ code, name, skins, loadout } = {}, reply) => {
+    const uid = await requireAccount();
+    if (!uid) return reply?.({ ok: false, error: 'Connecte-toi (onglet Profil) pour jouer.' });
     leave();
     const r = rooms.get(String(code || '').toUpperCase().trim());
     if (!r) return reply?.({ ok: false, error: 'Salon introuvable. Vérifie le code.' });
@@ -143,7 +191,13 @@ io.on('connection', (socket) => {
   });
 
   socket.on('leaveRoom', leave);
-  socket.on('disconnect', leave);
+  socket.on('disconnect', () => {
+    leave();
+    if (accountId) {
+      const set = onlineUsers.get(accountId);
+      if (set) { set.delete(socket.id); if (set.size === 0) onlineUsers.delete(accountId); }
+    }
+  });
 
   // Lobby
   socket.on('setMode', (mode) => room?.setMode(socket.id, mode));

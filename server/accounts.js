@@ -40,7 +40,10 @@ function maskEmail(email) {
   return `${shown}${'*'.repeat(Math.max(1, name.length - shown.length))}${domain}`;
 }
 function publicUser(u) {
-  return { id: u.id, email: maskEmail(u.email), pseudo: u.pseudo, pseudoChangedAt: u.pseudoChangedAt, pseudoCooldownDays: PSEUDO_COOLDOWN_DAYS };
+  return {
+    id: u.id, email: maskEmail(u.email), pseudo: u.pseudo, pseudoChangedAt: u.pseudoChangedAt,
+    pseudoCooldownDays: PSEUDO_COOLDOWN_DAYS, friends: u.friends || [],
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -74,6 +77,7 @@ async function makeStore() {
         async updatePseudo(id, pseudo, pseudoLower, pseudoChangedAt) {
           await col.updateOne({ id }, { $set: { pseudo, pseudoLower, pseudoChangedAt } });
         },
+        async setFriends(id, friends) { await col.updateOne({ id }, { $set: { friends } }); },
       };
     } catch (e) {
       console.error('❌ MONGODB_URI définie mais injoignable (vérifie l’adresse, le mot de passe et');
@@ -107,6 +111,10 @@ async function makeStore() {
       const u = users.find(x => x.id === id);
       if (u) { u.pseudo = pseudo; u.pseudoLower = pseudoLower; u.pseudoChangedAt = pseudoChangedAt; save(); }
     },
+    async setFriends(id, friends) {
+      const u = users.find(x => x.id === id);
+      if (u) { u.friends = friends; save(); }
+    },
   };
 }
 
@@ -124,7 +132,7 @@ export async function signup({ email, password, pseudo }) {
   if (await store.findByEmail(email)) return { error: 'Un compte existe déjà avec cet e-mail.' };
   if (await store.findByPseudoLower(pseudoLower)) return { error: 'Ce pseudo est déjà pris.' };
   const { salt, hash } = hashPassword(String(password));
-  const user = { id: crypto.randomUUID(), email, salt, hash, pseudo, pseudoLower, pseudoChangedAt: 0, createdAt: Date.now() };
+  const user = { id: crypto.randomUUID(), email, salt, hash, pseudo, pseudoLower, pseudoChangedAt: 0, friends: [], createdAt: Date.now() };
   try {
     await store.insert(user);
   } catch (e) {
@@ -186,3 +194,52 @@ export async function changePseudo(token, newPseudo) {
   }
   return { user: publicUser({ ...user, pseudo: newPseudo, pseudoChangedAt }) };
 }
+
+// ---------------------------------------------------------------------
+//  Amis : une liste d'identifiants de compte par utilisateur, qu'on
+//  résout à chaque fois en pseudo actuel (si l'ami a changé de pseudo
+//  depuis, on voit son pseudo à jour — pas celui du jour de l'ajout).
+// ---------------------------------------------------------------------
+export async function addFriend(token, pseudo) {
+  const id = sessions.get(token);
+  if (!id) return { error: 'Non connecté.' };
+  const store = await storeReady;
+  const me = await store.findById(id);
+  if (!me) return { error: 'Non connecté.' };
+  const target = await store.findByPseudoLower(String(pseudo || '').trim().toLowerCase());
+  if (!target) return { error: 'Aucun joueur avec ce pseudo.' };
+  if (target.id === me.id) return { error: 'C’est toi, ça.' };
+  const friends = Array.from(new Set([...(me.friends || []), target.id]));
+  await store.setFriends(me.id, friends);
+  return { friends: await resolveFriends(store, friends) };
+}
+export async function removeFriend(token, pseudo) {
+  const id = sessions.get(token);
+  if (!id) return { error: 'Non connecté.' };
+  const store = await storeReady;
+  const me = await store.findById(id);
+  if (!me) return { error: 'Non connecté.' };
+  const pseudoLower = String(pseudo || '').trim().toLowerCase();
+  const resolved = await resolveFriends(store, me.friends || []);
+  const friends = (me.friends || []).filter((fid, i) => resolved[i]?.pseudo.toLowerCase() !== pseudoLower);
+  await store.setFriends(me.id, friends);
+  return { friends: await resolveFriends(store, friends) };
+}
+export async function listFriends(token) {
+  const id = sessions.get(token);
+  if (!id) return { error: 'Non connecté.' };
+  const store = await storeReady;
+  const me = await store.findById(id);
+  if (!me) return { error: 'Non connecté.' };
+  return { friends: await resolveFriends(store, me.friends || []) };
+}
+async function resolveFriends(store, ids) {
+  const out = [];
+  for (const fid of ids) {
+    const f = await store.findById(fid);
+    if (f) out.push({ id: f.id, pseudo: f.pseudo });
+  }
+  return out;
+}
+/** Pour le serveur de jeu (Socket.io) : vérifie qu'une requête vient bien d'un compte connecté */
+export async function requireUser(token) { return userFromToken(token); }

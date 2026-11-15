@@ -77,10 +77,10 @@ function enterGame(needClick) {
   else { showScreen(null); input.lock(); }
 }
 
-function startSolo(botsShoot) {
+function startSolo() {
   initAudio();
   hud.clearFeed();
-  session = new SoloSession(ctx, botsShoot);
+  session = new SoloSession(ctx);
   enterGame(false);
 }
 
@@ -148,13 +148,18 @@ function ensureNet() {
 }
 
 // ---------------- Menu principal : onglets ----------------
-$('name-input').value = settings.name || '';
-$('name-input').addEventListener('input', renderMainSide);
+// Le pseudo vient toujours du compte maintenant (il faut être connecté pour jouer) :
+// le champ reste affiché mais n'est plus modifiable à la main.
 initTabs((tab) => { currentTab = tab; if (tab === 'inventory') renderInventory(); if (tab === 'skins') renderSkins(); refreshShowcase(); });
 
-// Onglet Jouer
-$('btn-solo-passive').onclick = () => startSolo(false);
-$('btn-solo-active').onclick = () => startSolo(true);
+// Onglet Jouer — un compte est obligatoire pour jouer (même en entraînement, par cohérence)
+function requireLogin() {
+  if (currentUser) return true;
+  document.querySelector('.topnav .tab[data-tab="profile"]').click();
+  toast('Connecte-toi (ou crée un compte) pour jouer.');
+  return false;
+}
+$('btn-solo-training').onclick = () => { if (requireLogin()) startSolo(); };
 
 async function openLobby(res) {
   if (!res?.ok) return ($('main-error').textContent = res?.error || 'Erreur');
@@ -163,8 +168,9 @@ async function openLobby(res) {
   showScreen('menu-lobby');
   drawLobby();
 }
-$('btn-create').onclick = async () => { initAudio(); openLobby(await ensureNet().create(getName())); };
+$('btn-create').onclick = async () => { if (!requireLogin()) return; initAudio(); openLobby(await ensureNet().create(getName())); };
 $('btn-join').onclick = async () => {
+  if (!requireLogin()) return;
   initAudio();
   const code = $('code-input').value.trim().toUpperCase();
   if (code.length !== 5) return ($('main-error').textContent = 'Le code fait 5 caractères.');
@@ -172,16 +178,15 @@ $('btn-join').onclick = async () => {
 };
 $('code-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-join').click(); });
 
-// ---------------- Mode de jeu (Partie privée / Classique / Classé "pour plus tard") ----------------
+// ---------------- Mode de jeu (Partie privée / Entraînement / Classique / Classé "pour plus tard") ----------------
+const PLAY_PANELS = ['private', 'training', 'classic', 'ranked'];
 document.querySelectorAll('.mode-tile').forEach((b) => {
   b.onclick = () => {
     const m = b.dataset.playmode;
     sfx.click();
-    if (m !== 'private') toast('Bientôt disponible !');
+    if (m === 'classic' || m === 'ranked') toast('Bientôt disponible !');
     document.querySelectorAll('.mode-tile').forEach((x) => x.classList.toggle('active', x === b));
-    $('panel-private').classList.toggle('hidden', m !== 'private');
-    $('panel-classic').classList.toggle('hidden', m !== 'classic');
-    $('panel-ranked').classList.toggle('hidden', m !== 'ranked');
+    for (const id of PLAY_PANELS) $(`panel-${id}`).classList.toggle('hidden', id !== m);
   };
 });
 
@@ -200,6 +205,7 @@ function applyUser(user) {
   currentUser = user;
   $('profile-guest').classList.toggle('hidden', !!user);
   $('profile-account').classList.toggle('hidden', !user);
+  $('profile-friends-card').classList.toggle('hidden', !user);
   if (user) {
     $('profile-email').textContent = user.email;
     $('profile-pseudo-input').value = user.pseudo;
@@ -208,13 +214,52 @@ function applyUser(user) {
     $('name-input').readOnly = true;
     $('name-input').title = 'Géré depuis l’onglet Profil (compte connecté)';
     settings.name = user.pseudo; saveSettings();
+    loadFriends();
   } else {
-    $('name-input').readOnly = false;
-    $('name-input').title = '';
+    $('name-input').value = '';
+    $('name-input').placeholder = 'Connecte-toi pour jouer';
+    renderFriendLists([]);
   }
   renderMainSide();
 }
 account.me().then(applyUser).catch(() => {});
+
+// ---------------- Amis (ajoutés par pseudo, onglet Profil + lobby) ----------------
+function renderFriendLists(friends) {
+  for (const id of ['friend-list', 'lobby-friend-list']) {
+    const ul = $(id);
+    ul.innerHTML = '';
+    for (const f of friends) {
+      const li = document.createElement('li');
+      li.className = 'friend-row';
+      li.innerHTML = `<span class="friend-dot ${f.online ? 'online' : ''}"></span><span class="friend-name">${escapeHtml(f.pseudo)}</span>`;
+      const rm = document.createElement('button');
+      rm.className = 'ghost small'; rm.textContent = '✕'; rm.title = 'Retirer';
+      rm.onclick = async () => { try { renderFriendLists(await account.removeFriend(f.pseudo)); } catch (err) { toast(err.message); } };
+      li.appendChild(rm);
+      ul.appendChild(li);
+    }
+    if (!friends.length) ul.innerHTML = '<li class="friend-empty hint">Aucun ami pour l\'instant.</li>';
+  }
+}
+async function loadFriends() {
+  try { renderFriendLists(await account.listFriends()); } catch { renderFriendLists([]); }
+}
+async function addFriendFrom(inputId, errorId) {
+  const input = $(inputId);
+  const pseudo = input.value.trim();
+  if (errorId) $(errorId).textContent = '';
+  if (!pseudo) return;
+  try {
+    renderFriendLists(await account.addFriend(pseudo));
+    input.value = '';
+    toast(`${pseudo} ajouté aux amis.`);
+  } catch (err) { if (errorId) $(errorId).textContent = err.message; else toast(err.message); }
+}
+$('btn-add-friend').onclick = () => addFriendFrom('friend-pseudo-input', 'friend-error');
+$('friend-pseudo-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('btn-add-friend').click(); });
+$('lobby-btn-add-friend').onclick = () => addFriendFrom('lobby-friend-input', null);
+$('lobby-friend-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('lobby-btn-add-friend').click(); });
 
 $('form-login').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -412,6 +457,8 @@ function frame() {
       weapons.update(dt, input, player, session, session.canFire() && input.locked);
     }
     session.update(dt);
+    // Entraînement : F1 change le comportement des bots (mobiles/immobiles, tirent ou non)
+    if (session instanceof SoloSession && input.pressed.has('F1')) toast(session.cycleBotBehavior());
     localBody.update(dt, player, weapons.current, settings.skins, !!session && player.alive && !spec, session === net ? (net.myTeam || 'A') : 'A');
     setListener(world.camera); // le son 3D suit la caméra
     hud.update(spec ? {

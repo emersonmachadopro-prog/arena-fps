@@ -1350,7 +1350,8 @@ function rightGripHand(g, M, pos, forearmEnd, tilt = 0.3) {
   group.add(holder);
   const rel = (p) => [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
   const wrist = [0.02, -0.035, 0.08];
-  group.add(capsule([0, -0.012, 0.025], wrist, 0.033, M.glove));     // poignet (gant)
+  // (le poignet lui-même est déjà sur la main — sa sangle — pas besoin d'une pièce à part :
+  // une courte capsule ici rendait une "boule" ronde, pas un poignet)
   // Avant-bras : relié au coude (fixe) et au poignet (qui bouge avec la main) → il pivote et s'étire naturellement
   const elbow = new THREE.Vector3(...forearmEnd), w0 = new THREE.Vector3(...wrist).add(group.position);
   const len0 = w0.distanceTo(elbow);
@@ -1375,7 +1376,6 @@ function leftSupportHand(g, M, pos, forearmEnd) {
   group.add(hand);
   const rel = (p) => [p[0] - pos[0], p[1] - pos[1], p[2] - pos[2]];
   const wrist = [-0.07, -0.05, 0.05];
-  group.add(capsule([-0.025, -0.012, 0.005], wrist, 0.033, M.glove));
   group.add(limbBetween(wrist, rel(forearmEnd), M));
   g.add(group);
   g.userData.leftHand = group;
@@ -1399,7 +1399,6 @@ function pistolSupportHand(g, M, pos, forearmEnd) {
   orientHand(hand, xAxis.toArray(), yAxis.toArray(), zAxis.toArray());
   group.add(hand);
   const wrist = zAxis.clone().multiplyScalar(0.075).add(new THREE.Vector3(-0.012, 0, 0));
-  group.add(capsule([zAxis.x * 0.03, zAxis.y * 0.03, zAxis.z * 0.03], wrist.toArray(), 0.033, M.glove));
   const rel = [forearmEnd[0] - pos[0], forearmEnd[1] - pos[1], forearmEnd[2] - pos[2]];
   group.add(limbBetween(wrist.toArray(), rel, M));
   g.add(group);
@@ -1657,7 +1656,6 @@ function buildButterfly(skin, skinId, skins) {
   hand.scale.x = -1;                                      // main droite
   orientHand(hand, [0, -1, 0], [1, 0, 0], [0, 0, 1]);     // index en haut, paume à gauche, doigts vers -z
   frame.add(hand);
-  handG.add(capsule([0, -0.02, 0.0], [0.01, -0.07, 0.03], 0.034, M.glove));      // poignet (sous la main)
   handG.add(limbBetween([0.01, -0.07, 0.03], [0.07, -0.4, 0.26], M));            // avant-bras vers le bas et vers nous
   g.add(handG);
   g.userData.hand = handG;
@@ -1731,7 +1729,6 @@ function buildKnife(skin, skinId, skins) {
   orientHand(hand, [0, 0, 1], [1, 0, 0], [0, 1, 0]);
   hand.position.set(0.03, 0.022, 0.065);
   handG.add(hand);
-  handG.add(capsule([0.02, 0, 0.1], [0.04, -0.04, 0.19], 0.034, M.glove));
   handG.add(limbBetween([0.04, -0.04, 0.19], [0.1, -0.16, 0.5], M));
   g.add(handG);
   g.userData.hand = handG;

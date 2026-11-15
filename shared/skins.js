@@ -16,9 +16,14 @@ export const WEAPON_SKINS = {
 };
 
 // Gants : style (mitaines, gants complets, mains nues) + couleurs
+// (seuls "default" et "black" sont proposés dans l'UI pour l'instant ; les
+//  autres sont gardés de côté pour une réutilisation future)
 export const GLOVE_SKINS = {
   default: { name: 'Tactiques', style: 'fingerless', color: 0x5d4f40, plate: 0x3a3128 },
   black:   { name: 'Noirs', style: 'full', color: 0x1d1e22, plate: 0x34363c },
+};
+export const GLOVE_SKINS_ALL = {
+  ...GLOVE_SKINS,
   leather: { name: 'Cuir', style: 'full', color: 0x6b4127, plate: 0x3d2414 },
   bare:    { name: 'Mains nues', style: 'bare', color: 0xc99a72, plate: 0xc99a72 },
   violet:  { name: 'Violet', style: 'full', color: 0x4c1d95, plate: 0xa855f7, glow: true },

@@ -2,7 +2,7 @@
 //  solo.js — Mode entraînement hors-ligne avec des bots.
 //  Tout est calculé dans le navigateur (pas besoin du multijoueur).
 // =====================================================================
-import { PLAYER, WEAPONS, pelletDirs, pelletDamage, zoneDamage } from '/shared/constants.js';
+import { PLAYER, WEAPONS, pelletDirs, pelletDamage, zoneDamage, hitPad } from '/shared/constants.js';
 import { MAP_BOXES, SPAWNS, BOT_WAYPOINTS } from '/shared/map.js';
 import { moveAndCollide, raycastWorld, traceShot, dirFromAngles } from '/shared/physics.js';
 import { Avatar } from './avatars.js';
@@ -20,8 +20,9 @@ export class SoloSession {
    * ctx = { scene, effects, hud, player, weapons }
    * botsShoot = true si les bots tirent sur le joueur
    */
-  constructor(ctx, botsShoot) {
+  constructor(ctx, { botsMove = true, botsShoot = false } = {}) {
     this.ctx = ctx;
+    this.botsMove = botsMove;
     this.botsShoot = botsShoot;
     this.kills = 0;
     this.streak = 0;
@@ -29,7 +30,16 @@ export class SoloSession {
     this.respawnTimer = 0;
     this.bots = BOT_NAMES.map((name, i) => this.makeBot(name, i));
     this.spawnPlayer();
-    ctx.hud.message('Entraînement', botsShoot ? 'Les bots ripostent !' : 'Bots passifs — entraîne ta visée', 2500);
+    ctx.hud.message('Entraînement', 'F1 pour changer le comportement des bots', 3000);
+  }
+
+  /** Touche F1 en entraînement : fait défiler les 4 combinaisons mobiles/tireurs */
+  cycleBotBehavior() {
+    if (!this.botsMove && !this.botsShoot) { this.botsMove = true; this.botsShoot = false; }
+    else if (this.botsMove && !this.botsShoot) { this.botsMove = true; this.botsShoot = true; }
+    else if (this.botsMove && this.botsShoot) { this.botsMove = false; this.botsShoot = true; }
+    else { this.botsMove = false; this.botsShoot = false; }
+    return `Bots : ${this.botsMove ? 'mobiles' : 'immobiles'}, ${this.botsShoot ? 'tirent' : 'ne tirent pas'}`;
   }
 
   makeBot(name, i) {
@@ -93,7 +103,7 @@ export class SoloSession {
       // Fusil à pompe : on additionne les plombs par bot, puis un seul "coup" par bot touché
       const per = new Map();
       const pellets = pelletDirs(dir, w.pelletSpread, w.pellets).map(d => {
-        const r = traceShot(origin, d, targets, MAP_BOXES, w.range);
+        const r = traceShot(origin, d, targets, MAP_BOXES, w.range, hitPad(weapon));
         if (!r.hit) return { dir: d, dist: Math.min(r.wallDist, w.range), hitWall: r.wallDist < w.range };
         const e = per.get(r.hit.id) || { dmg: 0, head: false };
         e.dmg += pelletDamage(w, r.hit.dist, r.hit.zone); e.head ||= r.hit.headshot;
@@ -103,7 +113,7 @@ export class SoloSession {
       for (const [bot, e] of per) this.hitBot(bot, Math.round(e.dmg), e.head, weapon);
       return { pellets, dist: pellets[0].dist };
     }
-    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range);
+    const { hit, wallDist } = traceShot(origin, dir, targets, MAP_BOXES, w.range, hitPad(weapon));
     if (hit) {
       this.hitBot(hit.id, zoneDamage(w, hit.zone), hit.headshot, weapon);
       return { dist: hit.dist, hitPlayer: true, confirmed: true }; // en solo, la touche est sûre
@@ -196,19 +206,23 @@ export class SoloSession {
       bot.pitch = 0;
     }
 
+    // Immobiles (réglage d'entraînement) : ils visent et tirent peut-être, mais ne marchent pas
+    if (!this.botsMove) { wishX = 0; wishZ = 0; }
     bot.vel.x = wishX * BOT_SPEED;
     bot.vel.z = wishZ * BOT_SPEED;
     bot.vel.y -= PLAYER.GRAVITY * dt;
     bot.grounded = moveAndCollide(bot.pos, bot.vel, dt, PLAYER.HEIGHT, MAP_BOXES, bot.grounded);
 
-    // Bloqué contre un mur ? On saute et on change de destination
-    bot.stuck += dt;
-    if (bot.stuck > 1) {
-      if (bot.lastPos && Math.hypot(bot.pos.x - bot.lastPos.x, bot.pos.z - bot.lastPos.z) < 0.8 && !sees) {
-        bot.wp = null;
-        if (bot.grounded) bot.vel.y = PLAYER.JUMP_SPEED;
+    // Bloqué contre un mur ? On saute et on change de destination (seulement s'ils marchent vraiment)
+    if (this.botsMove) {
+      bot.stuck += dt;
+      if (bot.stuck > 1) {
+        if (bot.lastPos && Math.hypot(bot.pos.x - bot.lastPos.x, bot.pos.z - bot.lastPos.z) < 0.8 && !sees) {
+          bot.wp = null;
+          if (bot.grounded) bot.vel.y = PLAYER.JUMP_SPEED;
+        }
+        bot.lastPos = { ...bot.pos }; bot.stuck = 0;
       }
-      bot.lastPos = { ...bot.pos }; bot.stuck = 0;
     }
   }
 
@@ -218,7 +232,7 @@ export class SoloSession {
     const a = Math.random() * Math.PI * 2, r = Math.random() * spread;
     const d = dirFromAngles(bot.yaw + Math.cos(a) * r, bot.pitch + Math.sin(a) * r);
     const target = [{ id: 'me', x: player.pos.x, y: player.pos.y, z: player.pos.z, crouch: player.crouch }];
-    const { hit, wallDist } = traceShot(eye, d, target, MAP_BOXES, 200);
+    const { hit, wallDist } = traceShot(eye, d, target, MAP_BOXES, 200, hitPad('ak'));
     const end = hit ? hit.dist : wallDist;
     bot.avatar.fire();
     const muzzle = bot.avatar.muzzleWorld(); // la traçante part du canon de son arme

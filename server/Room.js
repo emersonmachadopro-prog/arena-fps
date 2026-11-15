@@ -4,7 +4,7 @@
 //  le client ne fait qu'envoyer ses intentions (je bouge, je tire...).
 // =====================================================================
 
-import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted, pelletDirs, pelletDamage, zoneDamage } from '../shared/constants.js';
+import { PLAYER, WEAPONS, MATCH, TEAMS, PRIMARIES, SECONDARIES, BOT_LEVELS, validOptic, reloadPlan, roundsInserted, pelletDirs, pelletDamage, zoneDamage, hitPad } from '../shared/constants.js';
 import { BotBrain } from './Bot.js';
 import { sanitizeSkins } from '../shared/skins.js';
 import { MAP_BOXES, SPAWNS } from '../shared/map.js';
@@ -472,7 +472,7 @@ export class Room {
       }
       return;
     }
-    const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, 0.1);
+    const { hit, wallDist } = traceShot(eye, dir, enemies, MAP_BOXES, w.range, hitPad(weaponId));
 
     // Tout le monde voit le tir (traçante, son, sang si touché)
     const endDist = hit ? hit.dist : Math.min(wallDist, w.range);

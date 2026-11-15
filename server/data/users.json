@@ -1,0 +1,26 @@
+[
+  {
+    "id": "7d11e700-25ae-4371-9e0e-b46a0a686403",
+    "email": "testui1@example.com",
+    "salt": "1c647b57d7abce91f5f65a50ffe2768c",
+    "hash": "0b53e4f109f137841ac26c4b0f95f112bfbf7e1d02106ba7148d13e60030e1d0c5a6e2eb30a2683d3c22e0857a6ac75cbf359abe7ee90c9dd60592db54a4ebde",
+    "pseudo": "TestUI1",
+    "pseudoLower": "testui1",
+    "pseudoChangedAt": 0,
+    "friends": [
+      "51936dee-0cf0-4c99-992c-72f5449aa702"
+    ],
+    "createdAt": 1794715760899
+  },
+  {
+    "id": "51936dee-0cf0-4c99-992c-72f5449aa702",
+    "email": "testui2@example.com",
+    "salt": "e029fea3ed2a7db60f9929b98f9f9af5",
+    "hash": "aec4fc984a15348b90865a8ce71d4ba8064fec00e62496f9acc27fd2f7e22f7cdc081bb769c18f493716959e18ba52e3918ba7ee417acb01a7757bd94bac2436",
+    "pseudo": "TestUI2",
+    "pseudoLower": "testui2",
+    "pseudoChangedAt": 0,
+    "friends": [],
+    "createdAt": 1794715765459
+  }
+]

@@ -36,7 +36,7 @@ export class Input {
     addEventListener('keydown', (e) => {
       if (!this.enabled) return;
       // Bloque les raccourcis du navigateur pendant la partie
-      if (e.code === 'Tab' || e.code === 'Space' || e.ctrlKey || e.altKey) e.preventDefault();
+      if (e.code === 'Tab' || e.code === 'Space' || e.code === 'F1' || e.ctrlKey || e.altKey) e.preventDefault();
       this.press(e.code);
       this.pressedChars.add(e.key?.toLowerCase());
     });

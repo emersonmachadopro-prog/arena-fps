@@ -399,9 +399,17 @@ export class Character {
   }
 
   revive() {
-    this.actions.death.stop(); this.weights.death = 0; this.actions.death.setEffectiveWeight(0);
-    this.actions.death.play();
-    this.actions.death.paused = false;
+    this.actions.death.stop();
+    // Repart immédiatement sur "idle" à pleine intensité : sans ça, tous les poids
+    // du mixeur passent brièvement par zéro pendant le fondu → le personnage
+    // s'affiche un instant en pose de repos du squelette (bras en croix, "T-pose").
+    for (const n of Object.keys(this.actions)) {
+      this.weights[n] = n === 'idle' ? 1 : 0;
+      this.actions[n].setEffectiveWeight(this.weights[n]);
+    }
+    this.landT = 1;
+    this.mixer.update(0);
+    this.root.updateMatrixWorld(true);
     if (this.gun && this.gun.parent !== this.root) this.root.add(this.gun);
   }
 }

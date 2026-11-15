@@ -15,6 +15,13 @@ async function call(path, body) {
   return data;
 }
 
+async function get(path) {
+  const r = await fetch(path, { credentials: 'same-origin' });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || 'Erreur réseau.');
+  return data;
+}
+
 export const account = {
   async me() {
     const r = await fetch('/api/auth/me', { credentials: 'same-origin' });
@@ -25,4 +32,7 @@ export const account = {
   login: (email, password) => call('/api/auth/login', { email, password }).then(d => d.user),
   logout: () => call('/api/auth/logout', {}),
   changePseudo: (pseudo) => call('/api/auth/pseudo', { pseudo }).then(d => d.user),
+  listFriends: () => get('/api/friends').then(d => d.friends),
+  addFriend: (pseudo) => call('/api/friends/add', { pseudo }).then(d => d.friends),
+  removeFriend: (pseudo) => call('/api/friends/remove', { pseudo }).then(d => d.friends),
 };

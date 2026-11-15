@@ -191,17 +191,6 @@ export function showTab(tab) {
 export function initCharacterGrid(gridEl, onChange) {
   function render() {
     gridEl.innerHTML = '';
-    for (const [id, skin] of Object.entries(CHARACTER_SKINS)) {
-      const tile = document.createElement('div');
-      tile.className = 'skin-tile' + (settings.skins.character === id ? ' selected' : '');
-      tile.innerHTML = characterSVG(id) + `<div class="sname">${skin.name}</div>`;
-      tile.onclick = () => { settings.skins.character = id; saveSettings(); sfx.click(); render(); onChange('character'); };
-      gridEl.appendChild(tile);
-    }
-    // Gants (visibles en vue à la 1re personne)
-    const title = document.createElement('div');
-    title.className = 'grid-title'; title.textContent = '🧤 Gants';
-    gridEl.appendChild(title);
     for (const [id, g] of Object.entries(GLOVE_SKINS)) {
       const tile = document.createElement('div');
       tile.className = 'skin-tile' + ((settings.skins.gloves || 'default') === id ? ' selected' : '');
@@ -213,7 +202,7 @@ export function initCharacterGrid(gridEl, onChange) {
   return render;
 }
 
-/** Grille des skins d'une arme (dans l'Inventaire) */
+/** Grille des skins d'une arme (dans l'Inventaire) — gardée de côté, pas utilisée pour l'instant */
 function weaponSkinGrid(gridEl, weaponId, onChange) {
   gridEl.innerHTML = '';
   for (const [id, skin] of Object.entries(WEAPON_SKINS)) {
@@ -223,6 +212,10 @@ function weaponSkinGrid(gridEl, weaponId, onChange) {
     tile.onclick = () => { settings.skins[weaponId] = id; saveSettings(); sfx.click(); onChange(); };
     gridEl.appendChild(tile);
   }
+}
+/** Bandeau "skin à venir" : remplace la grille de skins tant qu'elle n'est pas proposée */
+function skinSoonBar(weaponOrKnife) {
+  return `<div class="skin-soon-bar">${weaponSVG(weaponOrKnife)}<span class="soon-badge">Bientôt disponible</span></div>`;
 }
 
 // ---------------------------------------------------------------------
@@ -297,7 +290,7 @@ export function initInventory(onChange) {
     if (category === 'primary') {
       d.innerHTML = `<h3>Arme principale</h3><div class="weapon-cards" id="lo-weapons"></div>
         <h3>Viseur (${WEAPONS[l.primary].name})</h3><div class="optic-grid" id="lo-optics"></div>
-        <h3>Skin (${WEAPONS[l.primary].name})</h3><div class="skin-grid" id="lo-skins"></div>`;
+        <h3>Skin</h3>${skinSoonBar(l.primary)}`;
       renderWeaponCards($('lo-weapons'), PRIMARIES, l.primary, (id) => { l.primary = id; l.optic = validOptic(id, l.optic); saveSettings(); changed(); }, l.optic);
       const og = $('lo-optics');
       for (const o of WEAPON_OPTICS[l.primary]) {
@@ -307,23 +300,12 @@ export function initInventory(onChange) {
         b.onclick = () => { l.optic = o; saveSettings(); sfx.click(); changed(); };
         og.appendChild(b);
       }
-      weaponSkinGrid($('lo-skins'), l.primary, changed);
     } else if (category === 'secondary') {
       d.innerHTML = `<h3>Arme secondaire</h3><div class="weapon-cards" id="lo-weapons"></div>
-        <h3>Skin (${WEAPONS[l.secondary || 'glock'].name})</h3><div class="skin-grid" id="lo-skins"></div>`;
+        <h3>Skin</h3>${skinSoonBar(l.secondary || 'glock')}`;
       renderWeaponCards($('lo-weapons'), SECONDARIES, l.secondary || 'glock', (id) => { l.secondary = id; saveSettings(); changed(); });
-      weaponSkinGrid($('lo-skins'), l.secondary || 'glock', changed);
     } else {
-      d.innerHTML = `<h3>Couteau</h3><div class="weapon-cards" id="lo-knives"></div><h3>Skin</h3><div class="skin-grid" id="lo-skins"></div>`;
-      const box = $('lo-knives');
-      for (const [id, name, desc] of [['combat', 'Couteau de combat', 'Le classique : solide et sobre.'], ['butterfly', 'Couteau papillon', 'Balisong : sortie en rotation, et des figures autour de l\'annulaire à l\'inspection (Y).']]) {
-        const b = document.createElement('button');
-        b.className = 'wcard' + ((l.knife || 'combat') === id ? ' selected' : '');
-        b.innerHTML = `<div class="wname">${name}${(l.knife || 'combat') === id ? '<small>Choisi</small>' : ''}</div>${weaponSVG(id === 'butterfly' ? 'butterfly' : 'knife', settings.skins.knife)}<div class="wdesc">${desc}</div>`;
-        b.onclick = () => { l.knife = id; saveSettings(); sfx.click(); changed(); };
-        box.appendChild(b);
-      }
-      weaponSkinGrid($('lo-skins'), 'knife', changed);
+      d.innerHTML = `<h3>Couteau</h3><h3>Skin</h3>${skinSoonBar('knife')}`;
     }
   }
   return render;
@@ -366,7 +348,7 @@ export function renderMainSide() {
   const l = activeLoadout();
   const sec = l.secondary || 'glock';
   void 0;
-  $('equipped-card').innerHTML = `<div class="card-title">🎒 Loadout équipé</div>
+  $('equipped-card').innerHTML = `<div class="card-title">Loadout équipé</div>
     <div class="equipped"><div class="lname">${escapeHtml(l.name)}</div>
     ${weaponSVG(l.primary, settings.skins[l.primary], l.optic)}
     <div class="eq-mini">${weaponSVG(sec, settings.skins[sec])}${weaponSVG(l.knife === 'butterfly' ? 'butterfly' : 'knife', settings.skins.knife)}</div>
@@ -416,11 +398,9 @@ export function initSettingsMenu() {
     };
   });
 
-  // Sons de kill
-  const ks = $('set-killsound');
-  ks.innerHTML = Object.entries(KILL_SOUND_PACKS).map(([id, n]) => `<option value="${id}">${n}</option>`).join('');
-  ks.onchange = () => { settings.killSound = ks.value; saveSettings(); };
-  $('btn-test-kill').onclick = () => { initAudio(); for (let i = 1; i <= 5; i++) setTimeout(() => sfx.killStreak(i, settings.killSound), (i - 1) * 550); };
+  // Sons de kill : verrouillés sur "Arena" pour l'instant (pas de select)
+  settings.killSound = 'classic';
+  $('btn-test-kill').onclick = () => { initAudio(); for (let i = 1; i <= 5; i++) setTimeout(() => sfx.killStreak(i, 'classic'), (i - 1) * 550); };
 
   // Qualité graphique
   document.querySelectorAll('#set-graphics button').forEach(b => {
@@ -473,7 +453,6 @@ export function initSettingsMenu() {
     for (const [inp, out, key, fmt] of sliders) { $(inp).value = settings[key]; $(out).textContent = fmt(settings[key]); }
     $('set-invert').checked = settings.invertY;
     $('set-fullscreen').checked = settings.fullscreen;
-    ks.value = settings.killSound;
     document.querySelectorAll('#set-graphics button').forEach(b => b.classList.toggle('active', b.dataset.q === settings.graphics));
     $('graphics-hint').textContent = GRAPHICS_HINT[settings.graphics] || '';
     // Viseur
@@ -520,15 +499,15 @@ export function renderLobby(lobby, myId, netInfo, actions) {
   warn.classList.toggle('hidden', !netInfo?.local);
   if (netInfo?.local) {
     warn.innerHTML = netInfo.lan
-      ? `📶 Le lien marche pour tes potes <b>sur le même Wi-Fi</b>. Pour des potes <b>chez eux</b>, utilise ton lien Render.`
-      : `⚠️ Tu joues en local : tes potes ne peuvent pas rejoindre.`;
+      ? `Le lien marche pour tes potes <b>sur le même Wi-Fi</b>. Pour des potes <b>chez eux</b>, utilise ton lien Render.`
+      : `Tu joues en local : tes potes ne peuvent pas rejoindre.`;
   }
 
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === lobby.mode);
     b.disabled = !isHost;
   });
-  $('mode-hint').textContent = isHost ? 'Tu es l\'hôte 👑' : 'Mode choisi par l\'hôte';
+  $('mode-hint').textContent = isHost ? 'Tu es l\'hôte' : 'Mode choisi par l\'hôte';
 
   for (const team of ['A', 'B']) {
     const list = lobby.players.filter(p => p.team === team);
@@ -539,9 +518,9 @@ export function renderLobby(lobby, myId, netInfo, actions) {
       const li = document.createElement('li');
       if (p) {
         li.className = 'pcard' + (p.ready || p.isBot ? ' ready' : '') + (p.id === myId ? ' me' : '');
-        const host = p.id === lobby.hostId ? '<span class="crown" title="Hôte">👑</span>' : '';
+        const host = p.id === lobby.hostId ? '<span class="crown" title="Hôte">HÔTE</span>' : '';
         const lo = WEAPONS[p.primary] ? `${WEAPONS[p.primary].name}${p.optic && p.optic !== 'iron' ? ' · ' + OPTICS[p.optic].name : ''}` : '';
-        li.innerHTML = `<span class="pav">${p.isBot ? '🤖' : escapeHtml(p.name[0]?.toUpperCase() || '?')}</span>
+        li.innerHTML = `<span class="pav">${p.isBot ? 'B' : escapeHtml(p.name[0]?.toUpperCase() || '?')}</span>
           <span class="pinfo"><span class="pname">${escapeHtml(p.name)}${p.id === myId ? ' <em>(toi)</em>' : ''}${host}</span><span class="plo">${lo}</span></span>
           <span class="pstate ${p.ready || p.isBot ? 'ok' : ''}">${p.isBot ? 'BOT' : p.ready ? 'PRÊT' : 'EN ATTENTE'}</span>`;
         if (p.isBot && isHost) {
@@ -593,7 +572,7 @@ export function renderLobby(lobby, myId, netInfo, actions) {
 // ---------------------------------------------------------------------
 export function renderEnd(e, myTeam) {
   const win = e.winner === myTeam;
-  $('end-title').textContent = myTeam ? (win ? '🏆 Victoire !' : 'Défaite…') : `Victoire ${TEAMS[e.winner].name}`;
+  $('end-title').textContent = myTeam ? (win ? 'Victoire !' : 'Défaite…') : `Victoire ${TEAMS[e.winner].name}`;
   $('end-title').style.color = TEAMS[e.winner].css;
   $('end-score').innerHTML = `<span class="A">${e.score.A}</span> — <span class="B">${e.score.B}</span>`;
   const rows = e.players.filter(p => p.team).sort((a, b) => b.kills - a.kills)
